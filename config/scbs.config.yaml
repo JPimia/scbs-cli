@@ -1,0 +1,32 @@
+service:
+  name: scbs
+  apiVersion: v1
+  host: 0.0.0.0
+  port: 8791
+
+storage:
+  driver: postgres
+  url: ${DATABASE_URL}
+
+cache:
+  driver: memory
+  redisUrl: ${REDIS_URL}
+
+repos:
+  pollingEnabled: true
+  pollingIntervalMs: 30000
+  allowLocalPaths: true
+
+freshness:
+  expireBundlesOnCriticalClaimStale: true
+  allowPartialBundles: false
+  overInvalidateByDefault: true
+
+receipts:
+  allowProvisionalPlannerInfluence: false
+  requireValidationForPromotion: true
+
+compatibility:
+  apiMode: strict
+  preserveUnknownMetadata: true
+  minSdkVersion: "0.1.0"

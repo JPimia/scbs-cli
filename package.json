@@ -1,0 +1,25 @@
+{
+  "name": "scbs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared Context Build System monorepo",
+  "packageManager": "pnpm@10.6.2",
+  "engines": {
+    "node": ">=22.0.0",
+    "bun": ">=1.3.0"
+  },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "bun run --cwd apps/cli build",
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "cli": "bun run --cwd apps/cli dev --"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}
