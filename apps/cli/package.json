@@ -1,0 +1,16 @@
+{
+  "name": "@scbs/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "scbs": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --target node --outfile ./dist/index.js",
+    "dev": "bun run ./src/index.ts",
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  }
+}
