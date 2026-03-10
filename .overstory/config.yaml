@@ -56,7 +56,7 @@ logging:
   verbose: false
   redactSecrets: true
 runtime:
-  default: claude
+  default: codex
   shellInitDelayMs: 0
   pi:
     provider: anthropic
