@@ -138,6 +138,16 @@ describe('CLI happy path', () => {
           statePath: '.scbs/state.json',
           stateExists: true,
         },
+        diagnostics: {
+          artifacts: {
+            repos: 1,
+            bundles: 1,
+            receipts: 1,
+          },
+          receipts: {
+            validated: 1,
+          },
+        },
       },
     });
 
@@ -180,6 +190,14 @@ describe('CLI happy path', () => {
     expect(JSON.parse(doctorAfterInit.stdout)).toMatchObject({
       data: {
         status: 'ok',
+        diagnostics: {
+          artifacts: {
+            repos: 1,
+          },
+          freshness: {
+            overall: 'fresh',
+          },
+        },
         checks: expect.arrayContaining([
           expect.objectContaining({
             name: 'config',
@@ -414,6 +432,14 @@ describe('CLI happy path', () => {
             configPath: 'config/scbs.config.yaml',
             stateExists: true,
             databaseUrlConfigured: true,
+          },
+          diagnostics: {
+            artifacts: {
+              repos: 1,
+            },
+            receipts: {
+              validated: 1,
+            },
           },
         },
       });

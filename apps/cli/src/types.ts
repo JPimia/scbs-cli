@@ -131,6 +131,34 @@ export interface DoctorReport {
   summary: string;
   api: ApiSurface;
   storage: StorageSurface;
+  diagnostics: {
+    artifacts: {
+      repos: number;
+      facts: number;
+      claims: number;
+      views: number;
+      bundles: number;
+      cachedBundles: number;
+      receipts: number;
+    };
+    freshness: {
+      overall: FreshnessState;
+      staleArtifacts: number;
+      pendingJobs: number;
+      completedJobs: number;
+      recentEvents: number;
+    };
+    receipts: {
+      pending: number;
+      validated: number;
+      rejected: number;
+    };
+    hotspots: {
+      staleBundleIds: string[];
+      pendingReceiptIds: string[];
+      pendingFreshnessJobIds: string[];
+    };
+  };
   checks: Array<{
     name: string;
     status: 'ok' | 'warn';

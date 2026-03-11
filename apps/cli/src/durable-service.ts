@@ -12,7 +12,7 @@ import type {
   RepoChangesInput,
   ScbsService,
 } from './service';
-import type { MigrationReport, StorageAdapter, StorageSurface } from './types';
+import type { DoctorReport, MigrationReport, StorageAdapter, StorageSurface } from './types';
 
 interface DurableServiceOptions {
   cwd?: string;
@@ -61,6 +61,53 @@ features:
   freshnessChecks: true
   rebuildTriggers: true
 `;
+
+function createDiagnostics(state: SeedState): DoctorReport['diagnostics'] {
+  const staleBundles = state.bundles.filter((bundle) => bundle.freshness !== 'fresh');
+  const staleFacts = state.facts.filter((fact) => fact.freshness !== 'fresh').length;
+  const staleClaims = state.claims.filter((claim) => claim.freshness !== 'fresh').length;
+  const staleViews = state.views.filter((view) => view.freshness !== 'fresh').length;
+  const pendingJobs = state.freshnessJobs.filter((job) => job.status === 'pending');
+  const completedJobs = state.freshnessJobs.filter((job) => job.status === 'completed');
+  const pendingReceipts = state.receipts.filter((receipt) => receipt.status === 'pending');
+  const validatedReceipts = state.receipts.filter((receipt) => receipt.status === 'validated');
+  const rejectedReceipts = state.receipts.filter((receipt) => receipt.status === 'rejected');
+  const staleArtifacts = staleFacts + staleClaims + staleViews + staleBundles.length;
+
+  return {
+    artifacts: {
+      repos: state.repos.length,
+      facts: state.facts.length,
+      claims: state.claims.length,
+      views: state.views.length,
+      bundles: state.bundles.length,
+      cachedBundles: state.bundleCache.length,
+      receipts: state.receipts.length,
+    },
+    freshness: {
+      overall:
+        staleArtifacts === 0
+          ? 'fresh'
+          : staleBundles.some((bundle) => bundle.freshness === 'expired')
+            ? 'expired'
+            : 'stale',
+      staleArtifacts,
+      pendingJobs: pendingJobs.length,
+      completedJobs: completedJobs.length,
+      recentEvents: state.freshnessEvents.length,
+    },
+    receipts: {
+      pending: pendingReceipts.length,
+      validated: validatedReceipts.length,
+      rejected: rejectedReceipts.length,
+    },
+    hotspots: {
+      staleBundleIds: staleBundles.slice(0, 5).map((bundle) => bundle.id),
+      pendingReceiptIds: pendingReceipts.slice(0, 5).map((receipt) => receipt.id),
+      pendingFreshnessJobIds: pendingJobs.slice(0, 5).map((job) => job.id),
+    },
+  };
+}
 
 function resolveDurablePaths(options: DurableServiceOptions = {}): DurablePaths {
   const cwd = options.cwd ?? process.cwd();
@@ -194,6 +241,7 @@ export class DurableScbsService implements ScbsService {
   public async doctor() {
     const configExists = await this.pathExists(this.paths.configPath);
     await this.store.ensureInitialized();
+    const diagnostics = createDiagnostics(await this.store.loadState());
 
     return {
       status: configExists ? ('ok' as const) : ('warn' as const),
@@ -208,6 +256,7 @@ export class DurableScbsService implements ScbsService {
         capabilities: createApiCapabilities(),
       },
       storage: this.createStorageSurface(),
+      diagnostics,
       checks: [
         {
           name: 'config',
