@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": [".overstory/**", "node_modules/**", "apps/**/dist/**"]
+    "ignore": [".overstory/**", ".claude/settings.local.json", "node_modules/**", "apps/**/dist/**"]
   },
   "formatter": {
     "enabled": true,
