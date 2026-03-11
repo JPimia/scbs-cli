@@ -17,7 +17,7 @@ import type {
   ViewRecord,
 } from './types';
 
-interface SeedState {
+export interface SeedState {
   repos: RepoRecord[];
   facts: FactRecord[];
   claims: ClaimRecord[];
@@ -36,7 +36,7 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
-const createSeedState = (): SeedState => {
+export const createSeedState = (): SeedState => {
   const repoId = 'repo_local-default';
   const factId = 'fact_repo-layout';
   const claimId = 'claim_layout-backed';

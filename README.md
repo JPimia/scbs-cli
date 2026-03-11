@@ -34,4 +34,4 @@ bun run cli -- repo list --json
 
 The `scbs` binary exposes the service, repository, fact, claim, view, bundle, freshness, and receipt commands from the MVP spec. Every command accepts `--json`.
 
-The current CLI implementation stays intentionally thin. It is wired through an adapter interface inside `apps/cli` so the command layer can switch to real `@scbs/*` package APIs once those slices are present.
+The current CLI implementation stays intentionally thin. It now persists local artifact state through a durable JSON adapter under `.scbs/state.json`, while still keeping the command layer isolated behind the `apps/cli` service interface.

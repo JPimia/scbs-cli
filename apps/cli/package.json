@@ -12,5 +12,8 @@
     "lint": "biome check .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@scbs/core": "workspace:*"
   }
 }

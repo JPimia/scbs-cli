@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { runCli } from './cli';
-import { createInMemoryScbsService } from './in-memory-service';
+import { createDurableScbsService } from './durable-service';
 
-const result = await runCli(process.argv.slice(2), createInMemoryScbsService());
+const result = await runCli(process.argv.slice(2), createDurableScbsService());
 
 if (result.stdout) {
   console.log(result.stdout);
