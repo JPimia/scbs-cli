@@ -140,7 +140,10 @@ export async function extractRepository(
         exportedSymbol.kind,
         exportedSymbol.line
       );
-      const anchor = makeAnchor(repository.id, scanFile.relativePath, hash, exportedSymbol.line);
+      const anchor = {
+        ...makeAnchor(repository.id, scanFile.relativePath, hash, exportedSymbol.line),
+        symbolId,
+      };
       const symbolRecord: SymbolRecord = {
         id: symbolId,
         repoId: repository.id,

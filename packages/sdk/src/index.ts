@@ -1,16 +1,22 @@
 import { buildApiIndex, routeManifest } from '../../../apps/server/src/index';
 import type {
   ApiSurface,
-  BundlePlanInput,
-  BundleRecord,
   FreshnessImpact,
   FreshnessState,
   ReceiptRecord,
   ReceiptSubmitInput,
+  RegisterRepoInput,
+  RepoChangesInput,
   ServeReport,
+  FactRecord as ServerFactRecord,
+  RepoRecord as ServerRepoRecord,
   ServiceCapability,
   StorageSurface,
 } from '../../../apps/server/src/index';
+import type {
+  ClaimRecord as ServerClaimRecord,
+  ViewRecord as ServerViewRecord,
+} from '../../../apps/server/src/types';
 import {
   parseAgentReceipt,
   parseBundleRequest,
@@ -52,30 +58,78 @@ export type {
 };
 export type {
   ApiSurface,
-  BundlePlanInput,
-  BundleRecord,
+  RegisterRepoInput,
   FreshnessImpact,
   FreshnessState,
   ReceiptRecord,
   ReceiptSubmitInput,
+  RepoChangesInput,
   ServeReport,
   ServiceCapability,
   StorageSurface,
 };
+export type BundlePlanInput = BundleRequest;
+export type BundleRecord = TaskBundle;
+export interface ScbsRepoRecord extends ServerRepoRecord {}
+export interface ScbsFactRecord extends ServerFactRecord {}
+export interface ScbsClaimRecord extends ServerClaimRecord {}
+export interface ScbsViewRecord extends ServerViewRecord {}
 
 export interface BundlePlanPayload {
-  task: string;
-  repo?: string;
-  repoIds?: string[];
+  id: string;
+  taskTitle: string;
+  taskDescription?: string;
+  repoIds: string[];
+  role?: string;
   parentBundleId?: string;
+  externalRef?: ExternalRef;
   fileScope?: string[];
   symbolScope?: string[];
+  constraints?: BundleRequest['constraints'];
+  metadata?: Record<string, unknown>;
 }
 
 export interface ReceiptSubmitPayload {
   bundle?: string;
   agent: string;
   summary: string;
+}
+
+export interface SisuBundlePlanJob {
+  workspaceId: string;
+  objective: string;
+  repositoryIds: string[];
+  parentContextId?: string;
+  focusFiles?: string[];
+  focusSymbols?: string[];
+}
+
+export interface SisuReceiptNote {
+  workspaceId: string;
+  agent: string;
+  summary: string;
+  bundleContextId?: string;
+}
+
+export interface SisuBundleSnapshot {
+  workspaceId: string;
+  bundleId: string;
+  objective: string;
+  repositoryIds: string[];
+  viewIds: string[];
+  freshness: BundleRecord['freshness'];
+  parentContextId?: string;
+  focusFiles?: string[];
+  focusSymbols?: string[];
+}
+
+export interface SisuReceiptSnapshot {
+  workspaceId: string;
+  receiptId: string;
+  agent: string;
+  summary: string;
+  status: ReceiptRecord['status'];
+  bundleContextId?: string;
 }
 
 export interface ScbsOperation {
@@ -94,6 +148,12 @@ export interface ApiIndex {
   endpoints: {
     health: string;
     root: string;
+    listRepos: string;
+    registerRepo: string;
+    showRepo: string;
+    scanRepo: string;
+    reportRepoChanges: string;
+    listFacts: string;
     planBundle: string;
     showBundle: string;
     bundleFreshness: string;
@@ -111,6 +171,67 @@ export interface ApiIndex {
   };
 }
 
+export interface ScbsClientOptions {
+  baseUrl: string;
+  fetch?: ScbsFetch;
+  headers?: Record<string, string>;
+}
+
+export interface ScbsClient {
+  repos: {
+    list(): Promise<ScbsRepoRecord[]>;
+    show(id: string): Promise<ScbsRepoRecord>;
+    register(input: RegisterRepoInput): Promise<ScbsRepoRecord>;
+    scan(id: string): Promise<ScbsRepoRecord>;
+    reportChanges(
+      input: RepoChangesInput
+    ): Promise<{ repoId: string; files: string[]; impacts: number }>;
+  };
+  facts: {
+    list(): Promise<ScbsFactRecord[]>;
+  };
+  bundles: {
+    plan(input: BundlePlanInput): Promise<BundleRecord>;
+    show(id: string): Promise<BundleRecord>;
+  };
+  claims: {
+    list(): Promise<ScbsClaimRecord[]>;
+    show(id: string): Promise<ScbsClaimRecord>;
+  };
+  views: {
+    list(): Promise<ScbsViewRecord[]>;
+    show(id: string): Promise<ScbsViewRecord>;
+    rebuild(id: string): Promise<ScbsViewRecord>;
+  };
+  integrations: {
+    sisu: {
+      createBundleRequest(job: SisuBundlePlanJob): Promise<SisuBundleSnapshot>;
+      createReceipt(note: SisuReceiptNote): Promise<SisuReceiptSnapshot>;
+    };
+  };
+}
+
+export class ScbsHttpError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly url: string;
+  readonly body: unknown;
+
+  constructor(response: Response, body: unknown, url: string) {
+    const detail = getErrorDetail(body);
+    super(
+      `SCBS request failed with ${response.status}${detail ? `: ${detail}` : ` ${response.statusText}`}`
+    );
+    this.name = 'ScbsHttpError';
+    this.status = response.status;
+    this.statusText = response.statusText;
+    this.url = url;
+    this.body = body;
+  }
+}
+
+type ScbsFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
 export const SCBS_API_VERSION = 'v1';
 export const SCBS_API_ROOT = '/api/v1';
 
@@ -127,25 +248,80 @@ export function createApiIndex(report: ServeReport): ApiIndex {
   return buildApiIndex(report) as ApiIndex;
 }
 
+export function createScbsClient(options: ScbsClientOptions): ScbsClient {
+  const request = createRequester(options);
+
+  return {
+    repos: {
+      list: () => request<ScbsRepoRecord[]>('GET', '/repos'),
+      show: (id) => request<ScbsRepoRecord>('GET', '/repos/:id', { id }),
+      register: (input) => request<ScbsRepoRecord>('POST', '/repos/register', undefined, input),
+      scan: (id) => request<ScbsRepoRecord>('POST', '/repos/:id/scan', { id }),
+      reportChanges: (input) =>
+        request<{ repoId: string; files: string[]; impacts: number }>(
+          'POST',
+          '/repos/:id/changes',
+          { id: input.id },
+          { files: input.files }
+        ),
+    },
+    facts: {
+      list: () => request<ScbsFactRecord[]>('GET', '/facts'),
+    },
+    bundles: {
+      plan: (input) =>
+        request<BundleRecord>('POST', '/bundles/plan', undefined, toBundlePlanPayload(input)),
+      show: (id) => request<BundleRecord>('GET', '/bundles/:id', { id }),
+    },
+    claims: {
+      list: () => request<ScbsClaimRecord[]>('GET', '/claims'),
+      show: (id) => request<ScbsClaimRecord>('GET', '/claims/:id', { id }),
+    },
+    views: {
+      list: () => request<ScbsViewRecord[]>('GET', '/views'),
+      show: (id) => request<ScbsViewRecord>('GET', '/views/:id', { id }),
+      rebuild: (id) => request<ScbsViewRecord>('POST', '/views/:id/rebuild', { id }),
+    },
+    integrations: {
+      sisu: {
+        createBundleRequest: (job) =>
+          request<SisuBundleSnapshot>('POST', '/integrations/sisu/bundle-request', undefined, job),
+        createReceipt: (note) =>
+          request<SisuReceiptSnapshot>('POST', '/integrations/sisu/receipt', undefined, note),
+      },
+    },
+  };
+}
+
 export function toBundlePlanPayload(input: BundlePlanInput): BundlePlanPayload {
   return {
-    task: input.task,
-    repo: input.repoId,
+    id: input.id,
+    taskTitle: input.taskTitle,
+    taskDescription: input.taskDescription,
     repoIds: input.repoIds,
+    role: input.role,
     parentBundleId: input.parentBundleId,
+    externalRef: input.externalRef,
     fileScope: input.fileScope,
     symbolScope: input.symbolScope,
+    constraints: input.constraints,
+    metadata: input.metadata,
   };
 }
 
 export function fromBundlePlanPayload(payload: BundlePlanPayload): BundlePlanInput {
   return {
-    task: payload.task,
-    repoId: payload.repo,
+    id: payload.id,
+    taskTitle: payload.taskTitle,
+    taskDescription: payload.taskDescription,
     repoIds: payload.repoIds,
+    role: payload.role,
     parentBundleId: payload.parentBundleId,
+    externalRef: payload.externalRef,
     fileScope: payload.fileScope,
     symbolScope: payload.symbolScope,
+    constraints: payload.constraints,
+    metadata: payload.metadata,
   };
 }
 
@@ -171,4 +347,86 @@ export function listServiceCapabilities(api: ApiSurface): ServiceCapability[] {
 
 export function createStorageReport(storage: StorageSurface): StorageSurface {
   return { ...storage };
+}
+
+function createRequester(options: ScbsClientOptions) {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  if (!fetchImpl) {
+    throw new Error('SCBS client requires a fetch implementation.');
+  }
+
+  const baseUrl = trimTrailingSlash(options.baseUrl);
+  const baseHeaders = options.headers ?? {};
+
+  return async <T>(
+    method: 'GET' | 'POST',
+    path: string,
+    pathParams?: Record<string, string>,
+    body?: unknown
+  ): Promise<T> => {
+    const url = `${baseUrl}${interpolatePath(`${SCBS_API_ROOT}${path}`, pathParams)}`;
+    const headers: Record<string, string> = { ...baseHeaders };
+    const init: RequestInit = { method, headers };
+
+    if (body !== undefined) {
+      headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+
+    const response = await fetchImpl(url, init);
+    const payload = await readJson(response);
+    if (!response.ok) {
+      throw new ScbsHttpError(response, payload, url);
+    }
+    return payload as T;
+  };
+}
+
+function interpolatePath(path: string, pathParams?: Record<string, string>): string {
+  if (!pathParams) {
+    return path;
+  }
+
+  return path.replace(/:([A-Za-z0-9_]+)/g, (_, key: string) => {
+    const value = pathParams[key];
+    if (!value) {
+      throw new Error(`Missing path parameter "${key}".`);
+    }
+    return encodeURIComponent(value);
+  });
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function getErrorDetail(body: unknown): string | undefined {
+  if (typeof body === 'string' && body.length > 0) {
+    return body;
+  }
+  if (!body || typeof body !== 'object') {
+    return undefined;
+  }
+
+  const record = body as Record<string, unknown>;
+  if (typeof record.message === 'string' && record.message.length > 0) {
+    return record.message;
+  }
+  if (typeof record.error === 'string' && record.error.length > 0) {
+    return record.error;
+  }
+  return undefined;
+}
+
+function trimTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '');
 }

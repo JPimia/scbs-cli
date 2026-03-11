@@ -19,7 +19,8 @@ describe('adapter-mission-control package surface', () => {
         symbolTargets: ['getFreshnessStatus'],
       })
     ).toEqual({
-      task: 'Report freshness drift',
+      id: 'req_mc_mission_7_report-freshness-drift',
+      taskTitle: 'Report freshness drift',
       repoIds: ['repo_1', 'repo_2'],
       parentBundleId: 'bundle_parent',
       fileScope: ['src/index.ts'],
@@ -32,18 +33,25 @@ describe('adapter-mission-control package surface', () => {
       mapBundleRecordToMissionControlStatus(
         {
           id: 'bundle_7',
+          requestId: 'req_7',
           repoIds: ['repo_1'],
-          task: 'Report freshness drift',
-          viewIds: ['view_1', 'view_2'],
+          summary: 'Bundle for Report freshness drift',
+          selectedViewIds: ['view_1', 'view_2'],
+          selectedClaimIds: ['claim_1'],
+          commands: [],
+          proofHandles: [],
           freshness: 'partial',
-          parentBundleId: 'bundle_parent',
+          fileScope: [],
+          symbolScope: [],
+          metadata: { parentBundleId: 'bundle_parent' },
+          createdAt: '2026-03-11T00:00:00.000Z',
         },
         'mission_7'
       )
     ).toEqual({
       missionId: 'mission_7',
       bundleId: 'bundle_7',
-      task: 'Report freshness drift',
+      task: 'Bundle for Report freshness drift',
       repoIds: ['repo_1'],
       trackedViewIds: ['view_1', 'view_2'],
       freshness: 'partial',

@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
+  mapBundleRecordToMissionControlStatus,
+  mapMissionControlTaskToBundlePlanInput,
+} from '../../../packages/adapter-mission-control/src/index';
+import {
   mapBundleRecordToSisuBundleSnapshot,
   mapReceiptRecordToSisuReceiptSnapshot,
   mapSisuBundlePlanJobToBundlePlanInput,
@@ -9,7 +13,10 @@ import {
 import {
   buildApiIndex,
   normalizeBundlePlanInput,
+  normalizeMissionControlTaskEnvelope,
   normalizeReceiptSubmitInput,
+  normalizeRegisterRepoInput,
+  normalizeRepoChangesInput,
   normalizeSisuBundlePlanJob,
   normalizeSisuReceiptNote,
   routeManifest,
@@ -39,6 +46,39 @@ const routeHandlers = new Map<string, RouteHandler>([
   ['GET /health', async ({ service }) => ({ body: await service.health() })],
   ['GET /api/v1', async ({ report }) => ({ body: buildApiIndex(report) })],
   ['GET /api/v1/', async ({ report }) => ({ body: buildApiIndex(report) })],
+  ['GET /api/v1/repos', async ({ service }) => ({ body: await service.listRepos() })],
+  [
+    'POST /api/v1/repos/register',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await service.registerRepo(
+        await withBadRequest(async () => normalizeRegisterRepoInput(await readJsonBody(request)))
+      ),
+    }),
+  ],
+  [
+    'GET /api/v1/repos/:id',
+    async ({ params, service }) => ({
+      body: await service.showRepo(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'POST /api/v1/repos/:id/scan',
+    async ({ params, service }) => ({
+      body: await service.scanRepo(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'POST /api/v1/repos/:id/changes',
+    async ({ params, request, service }) => ({
+      body: await service.reportRepoChanges(
+        await withBadRequest(async () =>
+          normalizeRepoChangesInput(params, await readJsonBody(request))
+        )
+      ),
+    }),
+  ],
+  ['GET /api/v1/facts', async ({ service }) => ({ body: await service.listFacts() })],
   ['GET /api/v1/claims', async ({ service }) => ({ body: await service.listClaims() })],
   [
     'GET /api/v1/claims/:id',
@@ -66,6 +106,17 @@ const routeHandlers = new Map<string, RouteHandler>([
       body: await service.planBundle(
         await withBadRequest(async () => normalizeBundlePlanInput(await readJsonBody(request)))
       ),
+    }),
+  ],
+  [
+    'POST /api/v1/integrations/mission-control/repo-sync',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await withBadRequest(async () => {
+        const task = normalizeMissionControlTaskEnvelope(await readJsonBody(request));
+        const bundle = await service.planBundle(mapMissionControlTaskToBundlePlanInput(task));
+        return mapBundleRecordToMissionControlStatus(bundle, task.missionId);
+      }),
     }),
   ],
   [

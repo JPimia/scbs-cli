@@ -2,11 +2,13 @@ import type {
   AgentReceipt,
   BundleRequest,
   ClaimRecord,
+  DependencyEdge,
   ExternalRef,
   FactRecord,
   FileRecord,
   RepositoryRef,
   SourceAnchor,
+  SymbolRecord,
   TaskBundle,
   ViewRecord,
 } from './types';
@@ -144,6 +146,35 @@ export function parseFactRecord(value: unknown, path = 'fact'): FactRecord {
     freshness: asString(input.freshness, `${path}.freshness`) as FactRecord['freshness'],
     createdAt: asString(input.createdAt, `${path}.createdAt`),
     updatedAt: asString(input.updatedAt, `${path}.updatedAt`),
+  };
+}
+
+export function parseSymbolRecord(value: unknown, path = 'symbol'): SymbolRecord {
+  const input = asObject(value, path);
+  return {
+    id: asString(input.id, `${path}.id`),
+    repoId: asString(input.repoId, `${path}.repoId`),
+    fileId: asString(input.fileId, `${path}.fileId`),
+    name: asString(input.name, `${path}.name`),
+    kind: asString(input.kind, `${path}.kind`),
+    exportName: asOptionalString(input.exportName, `${path}.exportName`),
+    signature: asOptionalString(input.signature, `${path}.signature`),
+    anchor: parseSourceAnchor(input.anchor, `${path}.anchor`),
+    metadata: asMetadata(input.metadata, `${path}.metadata`),
+  };
+}
+
+export function parseDependencyEdge(value: unknown, path = 'edge'): DependencyEdge {
+  const input = asObject(value, path);
+  return {
+    id: asString(input.id, `${path}.id`),
+    repoId: asString(input.repoId, `${path}.repoId`),
+    fromType: asString(input.fromType, `${path}.fromType`) as DependencyEdge['fromType'],
+    fromId: asString(input.fromId, `${path}.fromId`),
+    toType: asString(input.toType, `${path}.toType`) as DependencyEdge['toType'],
+    toId: asString(input.toId, `${path}.toId`),
+    edgeType: asString(input.edgeType, `${path}.edgeType`),
+    metadata: asMetadata(input.metadata, `${path}.metadata`),
   };
 }
 

@@ -86,14 +86,23 @@ export function presentApiIndex(report: ServeReport): ApiIndexViewModel {
 }
 
 export function presentBundleRecord(bundle: BundleRecord): BundleRecordViewModel {
+  const task =
+    typeof bundle.metadata?.taskTitle === 'string'
+      ? bundle.metadata.taskTitle
+      : typeof bundle.metadata?.task === 'string'
+        ? bundle.metadata.task
+        : bundle.summary;
   return {
     id: bundle.id,
-    task: bundle.task,
+    task,
     repoCount: bundle.repoIds.length,
-    viewCount: bundle.viewIds.length,
+    viewCount: bundle.selectedViewIds.length,
     freshness: bundle.freshness,
     scopeSummary: summarizeScope(bundle.fileScope, bundle.symbolScope),
-    parentBundleId: bundle.parentBundleId,
+    parentBundleId:
+      typeof bundle.metadata?.parentBundleId === 'string'
+        ? bundle.metadata.parentBundleId
+        : undefined,
   };
 }
 

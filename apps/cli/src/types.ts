@@ -1,3 +1,5 @@
+import type { TaskBundle } from '../../../packages/protocol/src/index';
+
 export type FreshnessState = 'fresh' | 'stale' | 'expired' | 'partial' | 'unknown';
 
 export interface ServiceCapability {
@@ -12,33 +14,30 @@ export interface ServiceCapability {
 }
 
 export interface ApiSurface {
-  kind: 'local-durable';
+  kind: 'standalone';
   baseUrl: string;
   apiVersion: 'v1';
   mode: 'dry-run' | 'live';
   capabilities: ServiceCapability[];
 }
 
+export type StorageAdapter = 'local-json' | 'postgres';
+
 export interface StorageSurface {
-  adapter: 'local-json' | 'postgres';
-  driver?: 'local-json' | 'postgres';
+  adapter: StorageAdapter;
   configPath: string;
-  statePath: string;
+  statePath?: string;
   stateExists: boolean;
-  databaseUrl?: string;
-  migrationTable?: string;
+  databaseUrlConfigured?: boolean;
 }
 
 export interface InitReport {
-  mode: 'local-durable';
+  mode: StorageAdapter;
   configPath: string;
-  statePath: string;
+  statePath?: string;
   created: boolean;
   configCreated: boolean;
   stateCreated: boolean;
-  driver?: 'local-json' | 'postgres';
-  databaseUrl?: string;
-  migrationTable?: string;
 }
 
 export interface ServeReport {
@@ -49,16 +48,12 @@ export interface ServeReport {
 }
 
 export interface MigrationReport {
-  adapter: 'local-json' | 'postgres';
-  statePath: string;
+  adapter: StorageAdapter;
+  statePath?: string;
   applied: string[];
   pending: number;
   baselineVersion: string;
   stateCreated: boolean;
-  driver?: 'local-json' | 'postgres';
-  databaseUrl?: string;
-  migrationTable?: string;
-  currentVersion?: string;
 }
 
 export interface RepoRecord {
@@ -92,28 +87,35 @@ export interface ViewRecord {
   freshness: FreshnessState;
 }
 
-export interface BundleRecord {
-  id: string;
-  repoIds: string[];
-  task: string;
-  viewIds: string[];
-  freshness: FreshnessState;
-  parentBundleId?: string;
-  fileScope?: string[];
-  symbolScope?: string[];
-  commands?: string[];
-  proofHandles?: Array<{
-    repoId: string;
-    filePath: string;
-    fileHash: string;
-  }>;
-  warnings?: string[];
-}
+export type BundleRecord = TaskBundle;
 
 export interface FreshnessImpact {
   artifactType: 'fact' | 'claim' | 'view' | 'bundle';
   artifactId: string;
   state: FreshnessState;
+}
+
+export interface FreshnessEventRecord {
+  id: string;
+  repoId: string;
+  files: string[];
+  createdAt: string;
+}
+
+export interface FreshnessJobRecord {
+  id: string;
+  repoId: string;
+  eventId: string;
+  files: string[];
+  status: 'pending' | 'completed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FreshnessWorkerReport {
+  processed: number;
+  remaining: number;
+  jobIds: string[];
 }
 
 export interface ReceiptRecord {

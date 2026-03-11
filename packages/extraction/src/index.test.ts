@@ -37,6 +37,14 @@ describe('extractRepository', () => {
       'package.json#test',
     ]);
     expect(result.symbols.map((symbol) => symbol.name)).toEqual(['hello']);
+    expect(result.symbols[0]?.anchor.startLine).toBe(1);
+    expect(result.symbols[0]?.anchor.symbolId).toBe(result.symbols[0]?.id);
+    expect(
+      result.edges.some(
+        (edge) => edge.edgeType === 'imports' && edge.metadata?.importPath === 'node:fs/promises'
+      )
+    ).toBeTrue();
+    expect(result.edges.some((edge) => edge.edgeType === 'contains')).toBeTrue();
     expect(result.facts.some((fact) => fact.type === 'script_command')).toBeTrue();
     expect(result.files.map((file) => file.id)).toEqual(repeated.files.map((file) => file.id));
     expect(result.symbols.map((symbol) => symbol.id)).toEqual(

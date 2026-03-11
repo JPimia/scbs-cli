@@ -3,107 +3,25 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runCli } from './cli';
-import { createDurableScbsService } from './durable-service';
+import { DurableScbsService, createDurableScbsService } from './durable-service';
 
 const childProcesses: Array<ReturnType<typeof spawn>> = [];
-const databaseUrlValue = process.env.DATABASE_URL;
-const hasLocalPsql = spawnSync('bash', ['-lc', 'command -v psql >/dev/null 2>&1']).status === 0;
-const hasDocker = spawnSync('bash', ['-lc', 'command -v docker >/dev/null 2>&1']).status === 0;
-const psqlPrefix =
-  hasLocalPsql || hasDocker
-    ? hasLocalPsql
-      ? ['psql']
-      : ['docker', 'run', '--rm', '--network', 'host', 'postgres:16', 'psql']
+const cliEntryPath = fileURLToPath(new URL('./index.ts', import.meta.url));
+const repoRoot = path.resolve(path.dirname(cliEntryPath), '../../..');
+const psqlPrefix = (() => {
+  const localClient = spawnSync('bash', ['-lc', 'command -v psql >/dev/null 2>&1']);
+  if (localClient.status === 0) {
+    return ['psql'];
+  }
+
+  const dockerClient = spawnSync('bash', ['-lc', 'command -v docker >/dev/null 2>&1']);
+  return dockerClient.status === 0
+    ? ['docker', 'run', '--rm', '--network', 'host', 'postgres:16', 'psql']
     : null;
-const describePostgres = databaseUrlValue && psqlPrefix ? describe : describe.skip;
-
-const quoteIdentifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
-
-const runPsql = async (databaseUrl: string, args: string[], stdin?: string) => {
-  const [command, ...commandArgs] = psqlPrefix ?? [];
-  if (!command) {
-    throw new Error('PostgreSQL tests require either a local "psql" client or Docker.');
-  }
-
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, [...commandArgs, '-d', databaseUrl, ...args], {
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.stdin.end(stdin);
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (signal) {
-        reject(new Error(`psql terminated with signal ${signal}`));
-        return;
-      }
-
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `psql exited with code ${code}`));
-        return;
-      }
-
-      resolve(stdout.trim());
-    });
-  });
-};
-
-const queryRows = async (databaseUrl: string, sql: string) =>
-  (await runPsql(databaseUrl, ['-v', 'ON_ERROR_STOP=1', '-At', '-F', '\t', '-c', sql]))
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => line.split('\t'));
-
-const withTempPostgresDatabase = async <T>(
-  run: (databaseUrl: string) => Promise<T>
-): Promise<T> => {
-  if (!databaseUrlValue) {
-    throw new Error('DATABASE_URL is required for PostgreSQL tests.');
-  }
-
-  const rootDatabaseUrl = new URL(databaseUrlValue);
-  const tempDatabaseName = `scbs_e2e_${randomUUID().replaceAll('-', '_')}`;
-  const tempDatabaseUrl = new URL(rootDatabaseUrl);
-  tempDatabaseUrl.pathname = `/${tempDatabaseName}`;
-  const migrationPath = path.join(process.cwd(), 'migrations', '0001_init.sql');
-  const migrationSql = await readFile(migrationPath, 'utf8');
-
-  await runPsql(rootDatabaseUrl.toString(), [
-    '-v',
-    'ON_ERROR_STOP=1',
-    '-c',
-    `CREATE DATABASE ${quoteIdentifier(tempDatabaseName)};`,
-  ]);
-  await runPsql(tempDatabaseUrl.toString(), ['-v', 'ON_ERROR_STOP=1'], migrationSql);
-
-  try {
-    return await run(tempDatabaseUrl.toString());
-  } finally {
-    await runPsql(rootDatabaseUrl.toString(), [
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-c',
-      [
-        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${tempDatabaseName}' AND pid <> pg_backend_pid();`,
-        `DROP DATABASE IF EXISTS ${quoteIdentifier(tempDatabaseName)};`,
-      ].join(' '),
-    ]);
-  }
-};
+})();
 
 afterEach(async () => {
   await Promise.all(
@@ -122,8 +40,90 @@ afterEach(async () => {
   );
 });
 
+async function execPsql(args: string[], options?: { stdin?: string }) {
+  if (!psqlPrefix) {
+    throw new Error('PostgreSQL runtime tests require either psql or Docker.');
+  }
+
+  const child = spawn(psqlPrefix[0] as string, [...psqlPrefix.slice(1), ...args], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.env,
+  });
+
+  if (options?.stdin) {
+    child.stdin.write(options.stdin);
+  }
+  child.stdin.end();
+
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+  child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`psql exited with signal ${signal}`));
+        return;
+      }
+
+      resolve(code ?? 1);
+    });
+  });
+
+  if (exitCode !== 0) {
+    throw new Error(Buffer.concat(stderr).toString('utf8').trim() || 'psql command failed');
+  }
+
+  return Buffer.concat(stdout).toString('utf8').trim();
+}
+
+async function createTemporaryPostgresDatabase() {
+  const databaseUrlValue = process.env.DATABASE_URL;
+  if (!databaseUrlValue) {
+    throw new Error('DATABASE_URL is required for PostgreSQL runtime tests.');
+  }
+
+  const adminUrl = new URL(databaseUrlValue);
+  const databaseName = `scbs_runtime_${randomUUID().replaceAll('-', '_')}`;
+  const runtimeUrl = new URL(adminUrl);
+  runtimeUrl.pathname = `/${databaseName}`;
+
+  await execPsql([
+    '-d',
+    adminUrl.toString(),
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-c',
+    `CREATE DATABASE "${databaseName}";`,
+  ]);
+
+  return {
+    databaseUrl: runtimeUrl.toString(),
+    async query(sql: string) {
+      return execPsql(['-d', runtimeUrl.toString(), '-v', 'ON_ERROR_STOP=1', '-At', '-c', sql]);
+    },
+    async cleanup() {
+      await execPsql([
+        '-d',
+        adminUrl.toString(),
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-c',
+        [
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${databaseName}' AND pid <> pg_backend_pid();`,
+          `DROP DATABASE IF EXISTS "${databaseName}";`,
+        ].join(' '),
+      ]);
+    },
+  };
+}
+
+const postgresIt = process.env.DATABASE_URL ? it : it.skip;
+
 describe('CLI happy path', () => {
-  it('reports the local durable surface through init, serve, doctor, and migrate', async () => {
+  it('reports the standalone service surface through init, serve, doctor, and migrate', async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-surface-'));
     const service = createDurableScbsService({ cwd });
 
@@ -145,7 +145,7 @@ describe('CLI happy path', () => {
     expect(init.exitCode).toBe(0);
     expect(JSON.parse(init.stdout)).toMatchObject({
       data: {
-        mode: 'local-durable',
+        mode: 'local-json',
         configPath: 'config/scbs.config.yaml',
         statePath: '.scbs/state.json',
         created: true,
@@ -161,6 +161,7 @@ describe('CLI happy path', () => {
         service: 'scbs',
         status: 'listening',
         api: {
+          kind: 'standalone',
           baseUrl: 'http://127.0.0.1:8791',
           apiVersion: 'v1',
           mode: 'live',
@@ -253,8 +254,9 @@ describe('CLI happy path', () => {
     expect(JSON.parse(bundle.stdout)).toMatchObject({
       data: {
         id: 'bundle_bootstrap-context',
+        requestId: 'req_bootstrap-context',
         repoIds: ['repo_demo-repo', 'repo_docs-repo'],
-        task: 'bootstrap context',
+        summary: 'Bundle for bootstrap context across 2 views',
       },
     });
 
@@ -278,9 +280,12 @@ describe('CLI happy path', () => {
     expect(JSON.parse(childBundle.stdout)).toMatchObject({
       data: {
         id: 'bundle_inherit-context',
+        requestId: 'req_inherit-context',
         repoIds: ['repo_demo-repo'],
-        task: 'inherit context',
-        parentBundleId: 'bundle_bootstrap-context',
+        summary: 'Bundle for inherit context across 1 views',
+        metadata: {
+          parentBundleId: 'bundle_bootstrap-context',
+        },
         fileScope: ['src/index.ts'],
       },
     });
@@ -325,7 +330,7 @@ describe('CLI happy path', () => {
     );
   });
 
-  it('initializes config and state files for the local durable adapter', async () => {
+  it('initializes config and state files for the local JSON adapter', async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-init-'));
     const service = createDurableScbsService({ cwd });
 
@@ -347,41 +352,225 @@ describe('CLI happy path', () => {
     );
   });
 
-  it('runs bounded freshness worker passes against the local durable adapter', async () => {
-    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-worker-local-'));
+  it('enqueues and drains durable freshness recompute jobs locally', async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-freshness-worker-'));
     const service = createDurableScbsService({ cwd });
     const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
-    const firstBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
-    const secondBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh api' });
+    await service.planBundle({
+      repoIds: [repo.id],
+      task: 'refresh me',
+      fileScope: ['src/index.ts'],
+    });
 
-    await service.expireBundle(firstBundle.id);
-    await service.expireBundle(secondBundle.id);
-
-    const firstPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
-    expect(firstPass.exitCode).toBe(0);
-    expect(JSON.parse(firstPass.stdout)).toMatchObject({
+    const report = await runCli(
+      ['repo', 'changes', repo.id, '--files', 'src/index.ts', '--json'],
+      service
+    );
+    expect(report.exitCode).toBe(0);
+    expect(JSON.parse(report.stdout)).toMatchObject({
       data: {
-        claimed: 1,
-        processed: 1,
-        succeeded: 1,
-        failed: 0,
-        updated: 1,
+        repoId: repo.id,
+        files: ['src/index.ts'],
+        impacts: 1,
       },
     });
-    await expect(service.getFreshnessStatus()).resolves.toMatchObject({ staleArtifacts: 1 });
 
-    const secondPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
-    expect(secondPass.exitCode).toBe(0);
-    expect(JSON.parse(secondPass.stdout)).toMatchObject({
+    await expect(service.getFreshnessStatus()).resolves.toMatchObject({
+      overall: 'partial',
+      staleArtifacts: 1,
+    });
+
+    const worker = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
+    expect(worker.exitCode).toBe(0);
+    expect(JSON.parse(worker.stdout)).toMatchObject({
       data: {
-        claimed: 1,
         processed: 1,
-        succeeded: 1,
-        failed: 0,
-        updated: 1,
+        remaining: 0,
       },
     });
-    await expect(service.getFreshnessStatus()).resolves.toMatchObject({ staleArtifacts: 0 });
+
+    await expect(service.getFreshnessStatus()).resolves.toMatchObject({
+      overall: 'fresh',
+      staleArtifacts: 0,
+    });
+  });
+
+  postgresIt('persists the durable flow through the PostgreSQL adapter', async () => {
+    const postgres = await createTemporaryPostgresDatabase();
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-'));
+    const service = new DurableScbsService({
+      cwd,
+      adapter: 'postgres',
+      databaseUrl: postgres.databaseUrl,
+    });
+
+    try {
+      const doctorBeforeInit = await runCli(['doctor', '--json'], service);
+      expect(doctorBeforeInit.exitCode).toBe(0);
+      expect(JSON.parse(doctorBeforeInit.stdout)).toMatchObject({
+        data: {
+          storage: {
+            adapter: 'postgres',
+            configPath: 'config/scbs.config.yaml',
+            stateExists: true,
+            databaseUrlConfigured: true,
+          },
+        },
+      });
+
+      const init = await runCli(['init', '--json'], service);
+      expect(init.exitCode).toBe(0);
+      expect(JSON.parse(init.stdout)).toMatchObject({
+        data: {
+          mode: 'postgres',
+          configPath: 'config/scbs.config.yaml',
+          created: true,
+          configCreated: true,
+          stateCreated: false,
+        },
+      });
+
+      const register = await runCli(
+        ['repo', 'register', '--name', 'pg-repo', '--path', '/tmp/pg-repo', '--json'],
+        service
+      );
+      expect(register.exitCode).toBe(0);
+      expect(JSON.parse(register.stdout)).toMatchObject({
+        data: {
+          id: 'repo_pg-repo',
+          name: 'pg-repo',
+        },
+      });
+
+      const bundle = await runCli(
+        [
+          'bundle',
+          'plan',
+          '--task',
+          'postgres bundle',
+          '--repo',
+          'repo_pg-repo',
+          '--file-scope',
+          'src/index.ts',
+          '--json',
+        ],
+        service
+      );
+      expect(bundle.exitCode).toBe(0);
+      expect(JSON.parse(bundle.stdout)).toMatchObject({
+        data: {
+          id: 'bundle_postgres-bundle',
+          repoIds: ['repo_pg-repo'],
+        },
+      });
+
+      const reportedChanges = await runCli(
+        ['repo', 'changes', 'repo_pg-repo', '--files', 'src/index.ts', '--json'],
+        service
+      );
+      expect(reportedChanges.exitCode).toBe(0);
+      expect(JSON.parse(reportedChanges.stdout)).toMatchObject({
+        data: {
+          repoId: 'repo_pg-repo',
+          files: ['src/index.ts'],
+          impacts: 1,
+        },
+      });
+
+      const receipt = await runCli(
+        [
+          'receipt',
+          'submit',
+          '--bundle',
+          'bundle_postgres-bundle',
+          '--agent',
+          'postgres-agent',
+          '--summary',
+          'captured durable state',
+          '--json',
+        ],
+        service
+      );
+      expect(receipt.exitCode).toBe(0);
+
+      const validateReceipt = await runCli(
+        ['receipt', 'validate', 'receipt_postgres-agent-captured-durable-state', '--json'],
+        service
+      );
+      expect(validateReceipt.exitCode).toBe(0);
+      expect(JSON.parse(validateReceipt.stdout)).toMatchObject({
+        data: {
+          id: 'receipt_postgres-agent-captured-durable-state',
+          status: 'validated',
+        },
+      });
+
+      const persistedService = new DurableScbsService({
+        cwd,
+        adapter: 'postgres',
+        databaseUrl: postgres.databaseUrl,
+      });
+
+      try {
+        await expect(persistedService.getFreshnessStatus()).resolves.toMatchObject({
+          overall: 'partial',
+          staleArtifacts: 1,
+        });
+        await expect(persistedService.runFreshnessWorker({ limit: 1 })).resolves.toMatchObject({
+          processed: 1,
+          remaining: 0,
+        });
+        await expect(persistedService.getFreshnessStatus()).resolves.toMatchObject({
+          overall: 'fresh',
+          staleArtifacts: 0,
+        });
+        await expect(persistedService.listRepos()).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: 'repo_pg-repo',
+              name: 'pg-repo',
+            }),
+          ])
+        );
+        await expect(persistedService.showBundle('bundle_postgres-bundle')).resolves.toMatchObject({
+          id: 'bundle_postgres-bundle',
+          repoIds: ['repo_pg-repo'],
+        });
+        await expect(
+          persistedService.showReceipt('receipt_postgres-agent-captured-durable-state')
+        ).resolves.toMatchObject({
+          id: 'receipt_postgres-agent-captured-durable-state',
+          status: 'validated',
+        });
+        const claims = await persistedService.listClaims();
+        expect(claims.length).toBeGreaterThan(1);
+      } finally {
+        await persistedService.close();
+      }
+
+      await expect(
+        postgres.query("SELECT COUNT(*) FROM repositories WHERE id = 'repo_pg-repo'")
+      ).resolves.toBe('1');
+      await expect(postgres.query('SELECT COUNT(*) FROM freshness_events')).resolves.toBe('1');
+      await expect(
+        postgres.query("SELECT COUNT(*) FROM recompute_jobs WHERE status = 'completed'")
+      ).resolves.toBe('1');
+      await expect(
+        postgres.query(
+          "SELECT status FROM agent_receipts WHERE id = 'receipt_postgres-agent-captured-durable-state'"
+        )
+      ).resolves.toBe('validated');
+      await expect(
+        postgres.query("SELECT COUNT(*) FROM task_bundles WHERE id = 'bundle_postgres-bundle'")
+      ).resolves.toBe('1');
+
+      const configContents = await readFile(path.join(cwd, 'config/scbs.config.yaml'), 'utf8');
+      expect(configContents).toContain('adapter: postgres');
+      expect(configContents).toContain('databaseUrlEnv: SCBS_DATABASE_URL');
+    } finally {
+      await service.close();
+      await postgres.cleanup();
+    }
   });
 
   it('starts a reachable HTTP surface for the real serve entrypoint', async () => {
@@ -391,7 +580,9 @@ describe('CLI happy path', () => {
     const bundle = await setupService.planBundle({
       repoIds: [repo.id],
       task: 'bootstrap context',
+      fileScope: ['src/index.ts'],
     });
+    await setupService.reportRepoChanges({ id: repo.id, files: ['src/index.ts'] });
     await setupService.expireBundle(bundle.id);
     const entrypoint = new URL('./index.ts', import.meta.url);
     const repoRoot = path.resolve(path.dirname(entrypoint.pathname), '../../..');
@@ -443,12 +634,17 @@ describe('CLI happy path', () => {
         planBundle: '/api/v1/bundles/plan',
         showBundle: '/api/v1/bundles/:id',
         bundleFreshness: '/api/v1/bundles/:id/freshness',
+        expireBundle: '/api/v1/bundles/:id/expire',
+        listBundleCache: '/api/v1/bundles/cache',
+        clearBundleCache: '/api/v1/bundles/cache/clear',
         freshnessImpacts: '/api/v1/freshness/impacts',
         freshnessStatus: '/api/v1/freshness/status',
         recomputeFreshness: '/api/v1/freshness/recompute',
         createReceipt: '/api/v1/receipts',
         listReceipts: '/api/v1/receipts',
         showReceipt: '/api/v1/receipts/:id',
+        validateReceipt: '/api/v1/receipts/:id/validate',
+        rejectReceipt: '/api/v1/receipts/:id/reject',
       },
     });
 
@@ -456,8 +652,9 @@ describe('CLI happy path', () => {
     expect(bundleResponse.status).toBe(200);
     expect(bundleResponse.body).toMatchObject({
       id: bundle.id,
+      requestId: 'req_bootstrap-context',
       repoIds: [repo.id],
-      task: 'bootstrap context',
+      summary: 'Bundle for bootstrap context across 1 views',
       freshness: 'expired',
     });
 
@@ -514,12 +711,69 @@ describe('CLI happy path', () => {
     expect(createdBundleResponse.status).toBe(201);
     expect(createdBundleResponse.body).toMatchObject({
       id: 'bundle_ship-api',
+      requestId: 'req_ship-api',
       repoIds: [repo.id],
-      task: 'ship api',
-      freshness: 'expired',
-      parentBundleId: bundle.id,
+      summary: 'Bundle for ship api across 1 views',
+      freshness: 'fresh',
+      metadata: {
+        parentBundleId: bundle.id,
+      },
       fileScope: ['src/api.ts'],
     });
+
+    const expireBundleResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/bundles/bundle_ship-api/expire',
+      {
+        method: 'POST',
+      }
+    );
+    expect(expireBundleResponse.status).toBe(200);
+    expect(expireBundleResponse.body).toMatchObject({
+      id: 'bundle_ship-api',
+      freshness: 'expired',
+    });
+
+    const bundleCacheResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/cache');
+    expect(bundleCacheResponse.status).toBe(200);
+    expect(Array.isArray(bundleCacheResponse.body)).toBe(true);
+    const bundleCacheEntries = Array.isArray(bundleCacheResponse.body)
+      ? bundleCacheResponse.body
+      : [];
+    expect(
+      bundleCacheEntries.some(
+        (entry) => entry.key === 'bundle:bootstrap' && entry.bundleId === 'bundle_bootstrap'
+      )
+    ).toBe(true);
+    expect(
+      bundleCacheEntries.some(
+        (entry) => entry.key === 'bundle:bootstrap-context' && entry.bundleId === bundle.id
+      )
+    ).toBe(true);
+    expect(
+      bundleCacheEntries.some(
+        (entry) =>
+          entry.key === 'bundle:ship-api' &&
+          entry.bundleId === 'bundle_ship-api' &&
+          entry.freshness === 'fresh'
+      )
+    ).toBe(true);
+
+    const clearBundleCacheResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/bundles/cache/clear',
+      {
+        method: 'POST',
+      }
+    );
+    expect(clearBundleCacheResponse.status).toBe(200);
+    expect(clearBundleCacheResponse.body).toMatchObject({
+      cleared: bundleCacheEntries.length,
+    });
+
+    const bundleCacheAfterClearResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/bundles/cache'
+    );
+    expect(bundleCacheAfterClearResponse.status).toBe(200);
+    expect(bundleCacheAfterClearResponse.body).toEqual([]);
 
     const recomputeResponse = await requestJson(
       'http://127.0.0.1:8791/api/v1/freshness/recompute',
@@ -529,7 +783,7 @@ describe('CLI happy path', () => {
     );
     expect(recomputeResponse.status).toBe(200);
     expect(recomputeResponse.body).toMatchObject({
-      updated: 2,
+      updated: 1,
     });
 
     const freshnessStatusAfter = await requestJson('http://127.0.0.1:8791/api/v1/freshness/status');
@@ -608,7 +862,7 @@ describe('CLI happy path', () => {
             claimKind: 'validated_receipt',
             receiptId: 'receipt_agent-1-submitted-proof',
           }),
-          invalidationKeys: ['.'],
+          invalidationKeys: ['src/index.ts'],
         }),
       ])
     );
@@ -620,8 +874,42 @@ describe('CLI happy path', () => {
           repoId: repo.id,
           claimIds: expect.arrayContaining(['claim_from_receipt_agent-1-submitted-proof']),
           freshness: 'partial',
-          name: '.',
-          fileScope: ['.'],
+          name: 'src/index.ts',
+          fileScope: ['src/index.ts'],
+        }),
+      ])
+    );
+
+    const persistedStateAfterValidate = JSON.parse(
+      await readFile(path.join(cwd, '.scbs/state.json'), 'utf8')
+    );
+    expect(persistedStateAfterValidate.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'receipt_agent-1-submitted-proof',
+          status: 'validated',
+        }),
+      ])
+    );
+    expect(persistedStateAfterValidate.claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'claim_from_receipt_agent-1-submitted-proof',
+          repoId: repo.id,
+          statement: 'submitted proof',
+          metadata: expect.objectContaining({
+            receiptId: 'receipt_agent-1-submitted-proof',
+            bundleId: bundle.id,
+            claimKind: 'validated_receipt',
+          }),
+        }),
+      ])
+    );
+    expect(persistedStateAfterValidate.views).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repoId: repo.id,
+          claimIds: expect.arrayContaining(['claim_from_receipt_agent-1-submitted-proof']),
         }),
       ])
     );
@@ -656,6 +944,31 @@ describe('CLI happy path', () => {
         }),
       ])
     );
+
+    const persistedStateAfterReject = JSON.parse(
+      await readFile(path.join(cwd, '.scbs/state.json'), 'utf8')
+    );
+    expect(persistedStateAfterReject.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'receipt_agent-2-failed-proof',
+          status: 'rejected',
+        }),
+      ])
+    );
+    expect(persistedStateAfterReject.claims).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'claim_from_receipt_agent-2-failed-proof',
+        }),
+      ])
+    );
+    expect(
+      persistedStateAfterReject.views.some((view: { claimIds?: string[] }) =>
+        view.claimIds?.includes('claim_from_receipt_agent-2-failed-proof')
+      )
+    ).toBe(false);
+
     const invalidJsonResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
       rawBody: '{bad json',
@@ -707,90 +1020,6 @@ describe('CLI happy path', () => {
     expect(unknownRouteResponse.body).toMatchObject({
       error: 'Not Found',
       message: 'No route for GET /api/v1/nope',
-    });
-  });
-});
-
-describePostgres('CLI PostgreSQL freshness recompute jobs', () => {
-  it('enqueues durable recompute jobs for expired bundles', async () => {
-    await withTempPostgresDatabase(async (databaseUrl) => {
-      const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-enqueue-'));
-      const service = createDurableScbsService({ cwd, databaseUrl });
-      const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
-      const bundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
-
-      await service.expireBundle(bundle.id);
-
-      await expect(
-        queryRows(databaseUrl, 'SELECT bundle_id, status FROM freshness_recompute_jobs;')
-      ).resolves.toEqual([[bundle.id, 'pending']]);
-    });
-  });
-
-  it('drains PostgreSQL recompute jobs through the bounded worker command', async () => {
-    await withTempPostgresDatabase(async (databaseUrl) => {
-      const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-drain-'));
-      const service = createDurableScbsService({ cwd, databaseUrl });
-      const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
-      const firstBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
-      const secondBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh api' });
-
-      await service.expireBundle(firstBundle.id);
-      await service.expireBundle(secondBundle.id);
-
-      const firstPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
-      expect(firstPass.exitCode).toBe(0);
-      expect(JSON.parse(firstPass.stdout)).toMatchObject({
-        data: {
-          claimed: 1,
-          processed: 1,
-          succeeded: 1,
-          failed: 0,
-          updated: 1,
-        },
-      });
-      await expect(service.showBundle(firstBundle.id)).resolves.toMatchObject({
-        id: firstBundle.id,
-        freshness: 'fresh',
-      });
-      await expect(service.showBundle(secondBundle.id)).resolves.toMatchObject({
-        id: secondBundle.id,
-        freshness: 'expired',
-      });
-      await expect(
-        queryRows(
-          databaseUrl,
-          'SELECT bundle_id, status FROM freshness_recompute_jobs ORDER BY requested_at, id;'
-        )
-      ).resolves.toEqual([
-        [firstBundle.id, 'completed'],
-        [secondBundle.id, 'pending'],
-      ]);
-
-      const secondPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
-      expect(secondPass.exitCode).toBe(0);
-      expect(JSON.parse(secondPass.stdout)).toMatchObject({
-        data: {
-          claimed: 1,
-          processed: 1,
-          succeeded: 1,
-          failed: 0,
-          updated: 1,
-        },
-      });
-      await expect(service.showBundle(secondBundle.id)).resolves.toMatchObject({
-        id: secondBundle.id,
-        freshness: 'fresh',
-      });
-      await expect(
-        queryRows(
-          databaseUrl,
-          'SELECT bundle_id, status FROM freshness_recompute_jobs ORDER BY requested_at, id;'
-        )
-      ).resolves.toEqual([
-        [firstBundle.id, 'completed'],
-        [secondBundle.id, 'completed'],
-      ]);
     });
   });
 });

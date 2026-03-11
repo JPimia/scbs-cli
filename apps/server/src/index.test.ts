@@ -10,7 +10,9 @@ import { createScbsHttpServer } from './server';
 import type {
   BundlePlanInput,
   ClaimRecord,
+  FactRecord,
   ReceiptSubmitInput,
+  RepoRecord,
   ServeReport,
   ServerScbsService,
   ViewRecord,
@@ -20,7 +22,7 @@ const claimFixtures: ClaimRecord[] = [
   {
     id: 'claim_repo-1_architecture',
     repoId: 'repo_local-default',
-    statement: 'The system uses a local durable adapter for SCBS state.',
+    statement: 'The standalone SCBS service uses a local JSON adapter for state.',
     factIds: ['fact_repo-1_storage', 'fact_repo-1_runtime'],
     freshness: 'fresh',
   },
@@ -50,6 +52,25 @@ const viewFixtures: ViewRecord[] = [
   },
 ];
 
+const repoFixtures: RepoRecord[] = [
+  {
+    id: 'repo_local-default',
+    name: 'local-default',
+    path: '/tmp/local-default',
+    status: 'scanned',
+    lastScannedAt: '2026-03-11T00:00:00.000Z',
+  },
+];
+
+const factFixtures: FactRecord[] = [
+  {
+    id: 'fact_repo-1_storage',
+    repoId: 'repo_local-default',
+    subject: 'storage adapter',
+    freshness: 'fresh',
+  },
+];
+
 function getFixtureById<T extends { id: string }>(fixtures: readonly T[], id: string): T {
   const match = fixtures.find((fixture) => fixture.id === id);
   if (match) {
@@ -69,8 +90,47 @@ class StubService implements ServerScbsService {
 
   public lastSubmittedReceiptInput: ReceiptSubmitInput | undefined;
 
+  public lastRepoChangesInput:
+    | {
+        id: string;
+        files: string[];
+      }
+    | undefined;
+
   public async health() {
     return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
+  }
+
+  public async registerRepo(input: { name: string; path: string }) {
+    return {
+      id: `repo_${input.name}`,
+      name: input.name,
+      path: input.path,
+      status: 'registered' as const,
+      lastScannedAt: null,
+    };
+  }
+
+  public async listRepos() {
+    return repoFixtures;
+  }
+
+  public async showRepo(id: string) {
+    return getFixtureById(repoFixtures, id);
+  }
+
+  public async scanRepo(id: string) {
+    const repo = await this.showRepo(id);
+    return { ...repo, status: 'scanned' as const };
+  }
+
+  public async reportRepoChanges(input: { id: string; files: string[] }) {
+    this.lastRepoChangesInput = input;
+    return { repoId: input.id, files: input.files, impacts: 1 };
+  }
+
+  public async listFacts() {
+    return factFixtures;
   }
 
   public async listClaims() {
@@ -98,24 +158,42 @@ class StubService implements ServerScbsService {
     this.lastPlannedBundleInput = input;
 
     return {
-      id: `bundle_${input.task.replace(/\s+/g, '-')}`,
-      repoIds: input.repoIds ?? [],
-      task: input.task,
-      viewIds: ['view_system-overview'],
+      id: `bundle_${input.taskTitle.replace(/\s+/g, '-')}`,
+      requestId: input.id,
+      repoIds: input.repoIds,
+      summary: `Bundle for ${input.taskTitle}`,
+      selectedViewIds: ['view_system-overview'],
+      selectedClaimIds: ['claim_repo-1_architecture'],
+      commands: [],
+      proofHandles: [],
       freshness: 'fresh' as const,
-      parentBundleId: input.parentBundleId,
-      fileScope: input.fileScope,
-      symbolScope: input.symbolScope,
+      fileScope: input.fileScope ?? [],
+      symbolScope: input.symbolScope ?? [],
+      cacheKey: `bundle:${input.id}`,
+      metadata: {
+        task: input.taskTitle,
+        taskTitle: input.taskTitle,
+        parentBundleId: input.parentBundleId,
+      },
+      createdAt: '2026-03-11T00:00:00.000Z',
     };
   }
 
   public async showBundle(id: string) {
     return {
       id,
+      requestId: `req_${id}`,
       repoIds: ['repo_local-default'],
-      task: 'bootstrap context',
-      viewIds: ['view_system-overview'],
+      summary: 'Bundle for bootstrap context',
+      selectedViewIds: ['view_system-overview'],
+      selectedClaimIds: ['claim_repo-1_architecture'],
+      commands: [],
+      proofHandles: [],
       freshness: 'fresh' as const,
+      fileScope: [],
+      symbolScope: [],
+      metadata: { task: 'bootstrap context', taskTitle: 'bootstrap context' },
+      createdAt: '2026-03-11T00:00:00.000Z',
     };
   }
 
@@ -126,10 +204,18 @@ class StubService implements ServerScbsService {
   public async expireBundle(id: string) {
     return {
       id,
+      requestId: `req_${id}`,
       repoIds: ['repo_local-default'],
-      task: 'bootstrap context',
-      viewIds: ['view_system-overview'],
+      summary: 'Bundle for bootstrap context',
+      selectedViewIds: ['view_system-overview'],
+      selectedClaimIds: ['claim_repo-1_architecture'],
+      commands: [],
+      proofHandles: [],
       freshness: 'expired' as const,
+      fileScope: [],
+      symbolScope: [],
+      metadata: { task: 'bootstrap context', taskTitle: 'bootstrap context' },
+      createdAt: '2026-03-11T00:00:00.000Z',
     };
   }
 
@@ -214,7 +300,7 @@ const report: ServeReport = {
   service: 'scbs',
   status: 'listening',
   api: {
-    kind: 'local-durable',
+    kind: 'standalone',
     baseUrl: 'http://127.0.0.1:8791',
     apiVersion: 'v1',
     mode: 'live',
@@ -260,7 +346,7 @@ describe('server contract', () => {
     const document = buildOpenApiDocument();
     const operations = Object.values(document.paths).flatMap((pathItem) => Object.keys(pathItem));
 
-    expect(routeManifest).toHaveLength(24);
+    expect(routeManifest).toHaveLength(31);
     expect(operations).toHaveLength(routeManifest.length);
     expect(document.paths['/api/v1/claims']?.get).toMatchObject({
       operationId: 'listClaims',
@@ -270,6 +356,15 @@ describe('server contract', () => {
     });
     expect(document.paths['/api/v1/bundles/{id}']?.get).toMatchObject({
       operationId: 'showBundle',
+    });
+    expect(document.paths['/api/v1/integrations/mission-control/repo-sync']?.post).toMatchObject({
+      operationId: 'createMissionControlRepoSync',
+    });
+    expect(document.paths['/api/v1/repos']?.get).toMatchObject({
+      operationId: 'listRepos',
+    });
+    expect(document.paths['/api/v1/facts']?.get).toMatchObject({
+      operationId: 'listFacts',
     });
     expect(document.paths['/api/v1/integrations/sisu/bundle-request']?.post).toMatchObject({
       operationId: 'createSisuBundleRequest',
@@ -309,9 +404,16 @@ describe('server contract', () => {
     await expect(indexResponse.json()).resolves.toMatchObject({
       service: 'scbs',
       endpoints: {
+        listRepos: '/api/v1/repos',
+        registerRepo: '/api/v1/repos/register',
+        showRepo: '/api/v1/repos/:id',
+        scanRepo: '/api/v1/repos/:id/scan',
+        reportRepoChanges: '/api/v1/repos/:id/changes',
+        listFacts: '/api/v1/facts',
         listClaims: '/api/v1/claims',
         rebuildView: '/api/v1/views/:id/rebuild',
         planBundle: '/api/v1/bundles/plan',
+        missionControlRepoSync: '/api/v1/integrations/mission-control/repo-sync',
         sisuBundleRequest: '/api/v1/integrations/sisu/bundle-request',
         sisuReceipt: '/api/v1/integrations/sisu/receipt',
       },
@@ -342,19 +444,29 @@ describe('server contract', () => {
       freshness: 'fresh',
     });
 
+    const reposResponse = await fetch(`${baseUrl}/api/v1/repos`);
+    expect(reposResponse.status).toBe(200);
+    await expect(reposResponse.json()).resolves.toEqual(repoFixtures);
+
+    const factsResponse = await fetch(`${baseUrl}/api/v1/facts`);
+    expect(factsResponse.status).toBe(200);
+    await expect(factsResponse.json()).resolves.toEqual(factFixtures);
+
     const planResponse = await fetch(`${baseUrl}/api/v1/bundles/plan`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        task: 'bootstrap context',
+        id: 'req_bootstrap-context',
+        taskTitle: 'bootstrap context',
         repoIds: ['repo_local-default'],
       }),
     });
     expect(planResponse.status).toBe(201);
     await expect(planResponse.json()).resolves.toMatchObject({
       id: 'bundle_bootstrap-context',
+      requestId: 'req_bootstrap-context',
       repoIds: ['repo_local-default'],
     });
 
@@ -366,7 +478,7 @@ describe('server contract', () => {
     });
   });
 
-  it('maps SISU integration endpoints through the existing bundle and receipt service calls', async () => {
+  it('maps integration bundle and receipt endpoints through the existing service calls', async () => {
     const service = new StubService();
     const server = createScbsHttpServer(service, report);
     servers.push(server);
@@ -382,6 +494,42 @@ describe('server contract', () => {
     }
 
     const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const missionControlResponse = await fetch(
+      `${baseUrl}/api/v1/integrations/mission-control/repo-sync`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          missionId: 'mission_alpha',
+          objective: 'Inspect cache invalidation',
+          repoIds: ['repo_local-default'],
+          bundleParentId: 'bundle_parent',
+          fileTargets: ['src/index.ts'],
+          symbolTargets: ['planBundle'],
+        }),
+      }
+    );
+    expect(missionControlResponse.status).toBe(201);
+    await expect(missionControlResponse.json()).resolves.toMatchObject({
+      missionId: 'mission_alpha',
+      bundleId: 'bundle_Inspect-cache-invalidation',
+      task: 'Bundle for Inspect cache invalidation',
+      repoIds: ['repo_local-default'],
+      trackedViewIds: ['view_system-overview'],
+      freshness: 'fresh',
+      bundleParentId: 'bundle_parent',
+    });
+    expect(service.lastPlannedBundleInput).toEqual({
+      id: 'req_mc_mission_alpha_inspect-cache-invalidation',
+      taskTitle: 'Inspect cache invalidation',
+      repoIds: ['repo_local-default'],
+      parentBundleId: 'bundle_parent',
+      fileScope: ['src/index.ts'],
+      symbolScope: ['planBundle'],
+    });
 
     const bundleResponse = await fetch(`${baseUrl}/api/v1/integrations/sisu/bundle-request`, {
       method: 'POST',
@@ -401,14 +549,15 @@ describe('server contract', () => {
     await expect(bundleResponse.json()).resolves.toMatchObject({
       workspaceId: 'workspace_alpha',
       bundleId: 'bundle_Inspect-cache-invalidation',
-      objective: 'Inspect cache invalidation',
+      objective: 'Bundle for Inspect cache invalidation',
       repositoryIds: ['repo_local-default'],
       parentContextId: 'bundle_parent',
       focusFiles: ['src/index.ts'],
       focusSymbols: ['planBundle'],
     });
     expect(service.lastPlannedBundleInput).toEqual({
-      task: 'Inspect cache invalidation',
+      id: 'req_sisu_workspace_alpha_inspect-cache-invalidation',
+      taskTitle: 'Inspect cache invalidation',
       repoIds: ['repo_local-default'],
       parentBundleId: 'bundle_parent',
       fileScope: ['src/index.ts'],
@@ -440,6 +589,43 @@ describe('server contract', () => {
       bundleId: 'bundle_Inspect-cache-invalidation',
       agent: 'codex',
       summary: 'Validation pending',
+    });
+
+    const registerRepoResponse = await fetch(`${baseUrl}/api/v1/repos/register`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'demo',
+        path: '/tmp/demo',
+      }),
+    });
+    expect(registerRepoResponse.status).toBe(201);
+    await expect(registerRepoResponse.json()).resolves.toMatchObject({
+      id: 'repo_demo',
+      name: 'demo',
+      path: '/tmp/demo',
+    });
+
+    const repoChangesResponse = await fetch(`${baseUrl}/api/v1/repos/repo_local-default/changes`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        files: ['src/index.ts'],
+      }),
+    });
+    expect(repoChangesResponse.status).toBe(200);
+    await expect(repoChangesResponse.json()).resolves.toMatchObject({
+      repoId: 'repo_local-default',
+      files: ['src/index.ts'],
+      impacts: 1,
+    });
+    expect(service.lastRepoChangesInput).toEqual({
+      id: 'repo_local-default',
+      files: ['src/index.ts'],
     });
   });
 
@@ -501,6 +687,25 @@ describe('server contract', () => {
     });
     expect(invalidSisuBundle.status).toBe(400);
     await expect(invalidSisuBundle.json()).resolves.toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "objective".',
+    });
+
+    const invalidMissionControl = await fetch(
+      `${baseUrl}/api/v1/integrations/mission-control/repo-sync`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          missionId: 'mission_alpha',
+          repoIds: ['repo_local-default'],
+        }),
+      }
+    );
+    expect(invalidMissionControl.status).toBe(400);
+    await expect(invalidMissionControl.json()).resolves.toMatchObject({
       error: 'Bad Request',
       message: 'Missing required field "objective".',
     });

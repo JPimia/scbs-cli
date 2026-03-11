@@ -15,7 +15,7 @@ describe('views package surface', () => {
       service: 'scbs',
       status: 'listening',
       api: {
-        kind: 'local-durable',
+        kind: 'standalone',
         baseUrl: 'http://127.0.0.1:4200',
         apiVersion: 'v1',
         mode: 'live',
@@ -43,12 +43,18 @@ describe('views package surface', () => {
     expect(
       presentBundleRecord({
         id: 'bundle_1',
+        requestId: 'req_1',
         repoIds: ['repo_1', 'repo_2'],
-        task: 'Inspect bundle',
-        viewIds: ['view_1', 'view_2'],
+        summary: 'Bundle for Inspect bundle',
+        selectedViewIds: ['view_1', 'view_2'],
+        selectedClaimIds: ['claim_1'],
+        commands: [],
+        proofHandles: [],
         freshness: 'stale',
+        metadata: { task: 'Inspect bundle', parentBundleId: undefined },
         fileScope: ['src/index.ts'],
         symbolScope: ['BundlePlanner'],
+        createdAt: '2026-03-11T00:00:00.000Z',
       })
     ).toEqual({
       id: 'bundle_1',

@@ -1,3 +1,5 @@
+import type { BundleRequest, TaskBundle } from '../../../packages/protocol/src/index';
+
 export type FreshnessState = 'fresh' | 'stale' | 'expired' | 'partial' | 'unknown';
 
 export interface ServiceCapability {
@@ -12,18 +14,21 @@ export interface ServiceCapability {
 }
 
 export interface ApiSurface {
-  kind: 'local-durable';
+  kind: 'standalone';
   baseUrl: string;
   apiVersion: 'v1';
   mode: 'dry-run' | 'live';
   capabilities: ServiceCapability[];
 }
 
+export type StorageAdapter = 'local-json' | 'postgres';
+
 export interface StorageSurface {
-  adapter: 'local-json';
+  adapter: StorageAdapter;
   configPath: string;
-  statePath: string;
+  statePath?: string;
   stateExists: boolean;
+  databaseUrlConfigured?: boolean;
 }
 
 export interface ServeReport {
@@ -33,15 +38,21 @@ export interface ServeReport {
   storage: StorageSurface;
 }
 
-export interface BundleRecord {
+export type BundleRecord = TaskBundle;
+
+export interface RepoRecord {
   id: string;
-  repoIds: string[];
-  task: string;
-  viewIds: string[];
+  name: string;
+  path: string;
+  status: 'registered' | 'scanned';
+  lastScannedAt: string | null;
+}
+
+export interface FactRecord {
+  id: string;
+  repoId: string;
+  subject: string;
   freshness: FreshnessState;
-  parentBundleId?: string;
-  fileScope?: string[];
-  symbolScope?: string[];
 }
 
 export interface ClaimRecord {
@@ -74,14 +85,7 @@ export interface ReceiptRecord {
   status: 'pending' | 'validated' | 'rejected';
 }
 
-export interface BundlePlanInput {
-  repoIds?: string[];
-  repoId?: string;
-  task: string;
-  parentBundleId?: string;
-  fileScope?: string[];
-  symbolScope?: string[];
-}
+export type BundlePlanInput = BundleRequest;
 
 export interface ReceiptSubmitInput {
   bundleId: string | null;
@@ -89,8 +93,26 @@ export interface ReceiptSubmitInput {
   summary: string;
 }
 
+export interface RegisterRepoInput {
+  name: string;
+  path: string;
+}
+
+export interface RepoChangesInput {
+  id: string;
+  files: string[];
+}
+
 export interface ServerScbsService {
   health(): Promise<{ status: 'ok'; service: string; version: string }>;
+  registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
+  listRepos(): Promise<RepoRecord[]>;
+  showRepo(id: string): Promise<RepoRecord>;
+  scanRepo(id: string): Promise<RepoRecord>;
+  reportRepoChanges(
+    input: RepoChangesInput
+  ): Promise<{ repoId: string; files: string[]; impacts: number }>;
+  listFacts(): Promise<FactRecord[]>;
   listClaims(): Promise<ClaimRecord[]>;
   showClaim(id: string): Promise<ClaimRecord>;
   listViews(): Promise<ViewRecord[]>;

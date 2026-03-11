@@ -6,11 +6,11 @@ import { deriveClaims } from './claims/service';
 import { FreshnessService } from './freshness/service';
 import { ReceiptService } from './receipts/service';
 import { RepositoryService } from './repos/service';
-import { type CoreStore, createMemoryStore } from './storage/memory-store';
+import { createMemoryStore } from './storage/memory-store';
 import { deriveViews } from './views/service';
 
-export function createCoreServices(options: { store?: CoreStore } = {}) {
-  const store = options.store ?? createMemoryStore();
+export function createCoreServices() {
+  const store = createMemoryStore();
   return {
     store,
     repositories: new RepositoryService(store),
@@ -19,9 +19,9 @@ export function createCoreServices(options: { store?: CoreStore } = {}) {
     receipts: new ReceiptService(store),
     cache: new BundleCacheService(store),
     derive(repoId: string) {
-      const repoClaims = deriveClaims(repoId, store.facts);
+      const repoClaims = deriveClaims(repoId, store.files, store.symbols, store.facts, store.edges);
       store.claims = store.claims.filter((claim) => claim.repoId !== repoId).concat(repoClaims);
-      const repoViews = deriveViews(repoId, store.claims);
+      const repoViews = deriveViews(repoId, store.files, store.symbols, store.claims, store.edges);
       store.views = store.views.filter((view) => view.repoId !== repoId).concat(repoViews);
       return {
         claims: repoClaims,
@@ -54,4 +54,3 @@ export function planBundle(
 }
 
 export * from './storage/memory-store';
-export * from './storage/postgres-store';
