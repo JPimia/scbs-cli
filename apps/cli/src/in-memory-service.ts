@@ -304,7 +304,13 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async planBundle(input: BundlePlanInput) {
-    requireById(this.state.repos, input.repoId, 'Repository');
+    const repoIds = dedupe(input.repoIds ?? (input.repoId ? [input.repoId] : []));
+    if (repoIds.length === 0) {
+      throw new Error('At least one repository is required.');
+    }
+    for (const repoId of repoIds) {
+      requireById(this.state.repos, repoId, 'Repository');
+    }
     const parentBundle =
       input.parentBundleId === undefined
         ? undefined
@@ -323,7 +329,12 @@ export class InMemoryScbsService implements ScbsService {
         : hasOverlap(parentFileScope, requestedFileScope) ||
           hasOverlap(parentSymbolScope, requestedSymbolScope));
     const inheritsParentContext = shouldInheritUnscopedParent || shouldInheritScopedParent;
-    const inheritedViewIds = inheritsParentContext ? (parentBundle?.viewIds ?? []) : [];
+    const inheritedViewIds =
+      inheritsParentContext && parentBundle
+        ? parentBundle.viewIds.filter((viewId) =>
+            repoIds.includes(requireById(this.state.views, viewId, 'View').repoId)
+          )
+        : [];
     const inheritedFileScope =
       shouldInheritUnscopedParent || requestedFileScope.length === 0
         ? parentFileScope
@@ -334,18 +345,20 @@ export class InMemoryScbsService implements ScbsService {
         : intersect(parentSymbolScope, requestedSymbolScope);
     const bundleFreshness = rollupFreshness([
       ...this.state.views
-        .filter((view) => view.repoId === input.repoId)
+        .filter((view) => repoIds.includes(view.repoId))
         .map((view) => view.freshness),
       ...(inheritsParentContext ? [parentBundle?.freshness ?? 'fresh'] : []),
     ]);
     const bundle: BundleRecord = {
       id: `bundle_${slugify(input.task)}`,
-      repoIds: [input.repoId],
+      repoIds,
       task: input.task,
       viewIds: [
         ...new Set([
           ...inheritedViewIds,
-          ...this.state.views.filter((view) => view.repoId === input.repoId).map((view) => view.id),
+          ...this.state.views
+            .filter((view) => repoIds.includes(view.repoId))
+            .map((view) => view.id),
         ]),
       ],
       freshness: bundleFreshness,

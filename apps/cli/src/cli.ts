@@ -144,7 +144,7 @@ const commandDefinitions: CommandDefinition[] = [
     description: 'Plan a bundle',
     options: [
       { name: 'task', type: 'string', required: true },
-      { name: 'repo', type: 'string', required: true },
+      { name: 'repo', type: 'csv', required: true },
       { name: 'parent-bundle', type: 'string' },
       { name: 'file-scope', type: 'csv' },
       { name: 'symbol-scope', type: 'csv' },
@@ -152,7 +152,7 @@ const commandDefinitions: CommandDefinition[] = [
     run: ({ service, values }) =>
       service.planBundle({
         task: getRequiredString(values, 'task'),
-        repoId: getRequiredString(values, 'repo'),
+        repoIds: getRequiredCsv(values, 'repo'),
         parentBundleId: getOptionalString(values, 'parent-bundle'),
         fileScope: getOptionalCsv(values, 'file-scope'),
         symbolScope: getOptionalCsv(values, 'symbol-scope'),

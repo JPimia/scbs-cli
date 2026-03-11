@@ -25,7 +25,8 @@ export interface RepoChangesInput {
 }
 
 export interface BundlePlanInput {
-  repoId: string;
+  repoIds?: string[];
+  repoId?: string;
   task: string;
   parentBundleId?: string;
   fileScope?: string[];
