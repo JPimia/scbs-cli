@@ -47,13 +47,13 @@ const routeDefinitions: RouteDefinition[] = [
     handler: async ({ request, service }) => {
       const body = await readJsonBody(request);
       const task = getRequiredString(body, 'task');
-      const repoId = getRequiredString(body, 'repo');
+      const repoIds = getRequiredRepoIds(body);
       const parentBundleId = getOptionalString(body, 'parentBundleId') ?? undefined;
       const fileScope = getOptionalStringArray(body, 'fileScope');
       const symbolScope = getOptionalStringArray(body, 'symbolScope');
       return {
         statusCode: 201,
-        body: await service.planBundle({ task, repoId, parentBundleId, fileScope, symbolScope }),
+        body: await service.planBundle({ task, repoIds, parentBundleId, fileScope, symbolScope }),
       };
     },
   },
@@ -252,6 +252,15 @@ function getOptionalStringArray(body: Record<string, unknown>, key: string): str
   }
 
   return value;
+}
+
+function getRequiredRepoIds(body: Record<string, unknown>): string[] {
+  const repoIds = getOptionalStringArray(body, 'repoIds');
+  if (repoIds && repoIds.length > 0) {
+    return repoIds;
+  }
+
+  return [getRequiredString(body, 'repo')];
 }
 
 function getRequiredParam(params: Record<string, string>, key: string): string {

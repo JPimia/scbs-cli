@@ -128,15 +128,35 @@ describe('CLI happy path', () => {
       },
     });
 
+    const secondRegister = await runCli(
+      ['repo', 'register', '--name', 'docs-repo', '--path', '/tmp/docs-repo', '--json'],
+      service
+    );
+    expect(secondRegister.exitCode).toBe(0);
+    expect(JSON.parse(secondRegister.stdout)).toMatchObject({
+      data: {
+        id: 'repo_docs-repo',
+        name: 'docs-repo',
+      },
+    });
+
     const bundle = await runCli(
-      ['bundle', 'plan', '--task', 'bootstrap context', '--repo', 'repo_demo-repo', '--json'],
+      [
+        'bundle',
+        'plan',
+        '--task',
+        'bootstrap context',
+        '--repo',
+        'repo_demo-repo,repo_docs-repo',
+        '--json',
+      ],
       service
     );
     expect(bundle.exitCode).toBe(0);
     expect(JSON.parse(bundle.stdout)).toMatchObject({
       data: {
         id: 'bundle_bootstrap-context',
-        repoIds: ['repo_demo-repo'],
+        repoIds: ['repo_demo-repo', 'repo_docs-repo'],
         task: 'bootstrap context',
       },
     });
@@ -199,7 +219,12 @@ describe('CLI happy path', () => {
     const statePath = path.join(cwd, '.scbs/state.json');
     const persistedState = JSON.parse(await readFile(statePath, 'utf8'));
     expect(persistedState.bundles).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: 'bundle_bootstrap-context' })])
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'bundle_bootstrap-context',
+          repoIds: ['repo_demo-repo', 'repo_docs-repo'],
+        }),
+      ])
     );
   });
 
@@ -230,7 +255,7 @@ describe('CLI happy path', () => {
     const setupService = createDurableScbsService({ cwd });
     const repo = await setupService.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
     const bundle = await setupService.planBundle({
-      repoId: repo.id,
+      repoIds: [repo.id],
       task: 'bootstrap context',
     });
     await setupService.expireBundle(bundle.id);
@@ -347,7 +372,7 @@ describe('CLI happy path', () => {
       method: 'POST',
       body: {
         task: 'ship api',
-        repo: repo.id,
+        repoIds: [repo.id],
         parentBundleId: bundle.id,
         fileScope: ['src/api.ts'],
       },
@@ -382,7 +407,7 @@ describe('CLI happy path', () => {
 
     const missingParentResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
-      body: { task: 'missing parent', repo: repo.id, parentBundleId: 'bundle_missing' },
+      body: { task: 'missing parent', repoIds: [repo.id], parentBundleId: 'bundle_missing' },
     });
     expect(missingParentResponse.status).toBe(404);
     expect(missingParentResponse.body).toMatchObject({

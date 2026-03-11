@@ -286,6 +286,239 @@ describe('core services', () => {
     expect(result.warnings).toContain('Bundle freshness is expired');
   });
 
+  it('narrows multi-repo parent inheritance to the requested repositories', () => {
+    const services = createCoreServices();
+    const repoAlpha = services.repositories.register({ name: 'alpha', rootPath: '/tmp/alpha' });
+    const repoBeta = services.repositories.register({ name: 'beta', rootPath: '/tmp/beta' });
+
+    services.store.facts = [
+      {
+        id: 'fact_alpha_command',
+        repoId: repoAlpha.id,
+        type: 'script_command',
+        subjectType: 'script',
+        subjectId: 'alpha-pkg',
+        value: { path: 'package.json', command: 'bun test --filter alpha' },
+        anchors: [{ repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+        versionStamp: 'hash-alpha',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'fact_beta_command',
+        repoId: repoBeta.id,
+        type: 'script_command',
+        subjectType: 'script',
+        subjectId: 'beta-pkg',
+        value: { path: 'package.json', command: 'bun test --filter beta' },
+        anchors: [{ repoId: repoBeta.id, filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+        versionStamp: 'hash-beta',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.claims = [
+      {
+        id: 'claim_alpha',
+        repoId: repoAlpha.id,
+        text: 'alpha shared implementation matters',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_alpha_command'],
+        anchors: [{ repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/shared.ts'],
+        metadata: { filePath: 'src/shared.ts', symbolName: 'sharedSymbol' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_beta',
+        repoId: repoBeta.id,
+        text: 'beta shared implementation matters',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_beta_command'],
+        anchors: [{ repoId: repoBeta.id, filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+        freshness: 'expired',
+        invalidationKeys: ['src/shared.ts'],
+        metadata: { filePath: 'src/shared.ts', symbolName: 'sharedSymbol' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_alpha',
+        repoId: repoAlpha.id,
+        type: 'file_scope',
+        key: `${repoAlpha.id}:src/shared.ts`,
+        title: 'Alpha shared scope',
+        summary: 'alpha shared implementation',
+        claimIds: ['claim_alpha'],
+        fileScope: ['src/shared.ts'],
+        symbolScope: ['sharedSymbol'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_beta',
+        repoId: repoBeta.id,
+        type: 'file_scope',
+        key: `${repoBeta.id}:src/shared.ts`,
+        title: 'Beta shared scope',
+        summary: 'beta shared implementation',
+        claimIds: ['claim_beta'],
+        fileScope: ['src/shared.ts'],
+        symbolScope: ['sharedSymbol'],
+        freshness: 'expired',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.bundles.push({
+      id: 'bundle_parent_multi',
+      requestId: 'req_parent_multi',
+      repoIds: [repoAlpha.id, repoBeta.id],
+      summary: 'Parent multi-repo bundle',
+      selectedViewIds: ['view_alpha', 'view_beta'],
+      selectedClaimIds: ['claim_alpha', 'claim_beta'],
+      fileScope: ['src/shared.ts'],
+      symbolScope: ['sharedSymbol'],
+      commands: ['bun test --filter alpha', 'bun test --filter beta'],
+      proofHandles: [
+        { repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' },
+        { repoId: repoBeta.id, filePath: 'src/shared.ts', fileHash: 'hash-beta' },
+      ],
+      freshness: 'expired',
+      cacheKey: 'parent-multi',
+      metadata: {},
+      createdAt: '',
+    });
+
+    const result = planBundle(services, {
+      id: 'req_alpha_only',
+      taskTitle: 'Ship alpha changes',
+      repoIds: [repoAlpha.id],
+      fileScope: ['src/shared.ts'],
+      parentBundleId: 'bundle_parent_multi',
+      constraints: { includeCommands: true, includeProofHandles: true },
+    });
+
+    expect(result.bundle.selectedViewIds).toEqual(['view_alpha']);
+    expect(result.bundle.selectedClaimIds).toEqual(['claim_alpha']);
+    expect(result.bundle.commands).toEqual(['bun test --filter alpha']);
+    expect(result.bundle.proofHandles).toEqual([
+      { repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' },
+    ]);
+    expect(result.bundle.freshness).toBe('fresh');
+    expect(result.bundle.fileScope).toEqual(['src/shared.ts']);
+  });
+
+  it('does not cross-select same-path inherited scope from another repo', () => {
+    const services = createCoreServices();
+    const repoAlpha = services.repositories.register({ name: 'alpha', rootPath: '/tmp/alpha' });
+    const repoBeta = services.repositories.register({ name: 'beta', rootPath: '/tmp/beta' });
+
+    services.store.claims = [
+      {
+        id: 'claim_alpha',
+        repoId: repoAlpha.id,
+        text: 'alpha entrypoint',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repoAlpha.id, filePath: 'src/index.ts', fileHash: 'hash-alpha' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/index.ts'],
+        metadata: { filePath: 'src/index.ts', symbolName: 'bootstrap' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_beta',
+        repoId: repoBeta.id,
+        text: 'beta entrypoint',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repoBeta.id, filePath: 'src/index.ts', fileHash: 'hash-beta' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/index.ts'],
+        metadata: { filePath: 'src/index.ts', symbolName: 'bootstrap' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_alpha',
+        repoId: repoAlpha.id,
+        type: 'file_scope',
+        key: `${repoAlpha.id}:src/index.ts`,
+        title: 'Alpha entrypoint',
+        summary: 'alpha bootstrap',
+        claimIds: ['claim_alpha'],
+        fileScope: ['src/index.ts'],
+        symbolScope: ['bootstrap'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_beta',
+        repoId: repoBeta.id,
+        type: 'file_scope',
+        key: `${repoBeta.id}:src/index.ts`,
+        title: 'Beta entrypoint',
+        summary: 'beta bootstrap',
+        claimIds: ['claim_beta'],
+        fileScope: ['src/index.ts'],
+        symbolScope: ['bootstrap'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.bundles.push({
+      id: 'bundle_parent_beta',
+      requestId: 'req_parent_beta',
+      repoIds: [repoBeta.id],
+      summary: 'Beta parent bundle',
+      selectedViewIds: ['view_beta'],
+      selectedClaimIds: ['claim_beta'],
+      fileScope: ['src/index.ts'],
+      symbolScope: ['bootstrap'],
+      commands: [],
+      proofHandles: [{ repoId: repoBeta.id, filePath: 'src/index.ts', fileHash: 'hash-beta' }],
+      freshness: 'fresh',
+      cacheKey: 'parent-beta',
+      metadata: {},
+      createdAt: '',
+    });
+
+    const result = planBundle(services, {
+      id: 'req_alpha',
+      taskTitle: 'Inspect alpha',
+      repoIds: [repoAlpha.id],
+      parentBundleId: 'bundle_parent_beta',
+    });
+
+    expect(result.bundle.selectedViewIds).toEqual(['view_alpha']);
+    expect(result.bundle.selectedClaimIds).toEqual(['claim_alpha']);
+    expect(result.bundle.proofHandles).toEqual([
+      { repoId: repoAlpha.id, filePath: 'src/index.ts', fileHash: 'hash-alpha' },
+    ]);
+    expect(result.bundle.freshness).toBe('fresh');
+  });
+
   it('changes the cache key when inherited parent context changes', () => {
     const services = createCoreServices();
     const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
