@@ -240,4 +240,51 @@ describe('server contract', () => {
       error: 'Method Not Allowed',
     });
   });
+
+  it('returns bad request for invalid bundle and receipt payloads', async () => {
+    const server = createScbsHttpServer(new StubService(), report);
+    servers.push(server);
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+      server.once('error', reject);
+    });
+
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected an ephemeral TCP address.');
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const invalidBundle = await fetch(`${baseUrl}/api/v1/bundles/plan`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        repoIds: ['repo_local-default'],
+      }),
+    });
+    expect(invalidBundle.status).toBe(400);
+    await expect(invalidBundle.json()).resolves.toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "task".',
+    });
+
+    const invalidReceipt = await fetch(`${baseUrl}/api/v1/receipts`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        summary: 'Planned a bundle.',
+      }),
+    });
+    expect(invalidReceipt.status).toBe(400);
+    await expect(invalidReceipt.json()).resolves.toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "agent".',
+    });
+  });
 });

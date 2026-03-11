@@ -35,7 +35,9 @@ const routeHandlers = new Map<string, RouteHandler>([
     'POST /api/v1/bundles/plan',
     async ({ request, service }) => ({
       statusCode: 201,
-      body: await service.planBundle(normalizeBundlePlanInput(await readJsonBody(request))),
+      body: await service.planBundle(
+        await withBadRequest(async () => normalizeBundlePlanInput(await readJsonBody(request)))
+      ),
     }),
   ],
   ['GET /api/v1/bundles/cache', async ({ service }) => ({ body: await service.listBundleCache() })],
@@ -77,7 +79,9 @@ const routeHandlers = new Map<string, RouteHandler>([
     'POST /api/v1/receipts',
     async ({ request, service }) => ({
       statusCode: 201,
-      body: await service.submitReceipt(normalizeReceiptSubmitInput(await readJsonBody(request))),
+      body: await service.submitReceipt(
+        await withBadRequest(async () => normalizeReceiptSubmitInput(await readJsonBody(request)))
+      ),
     }),
   ],
   ['GET /api/v1/receipts', async ({ service }) => ({ body: await service.listReceipts() })],
@@ -184,6 +188,19 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
     }
 
     const message = error instanceof Error ? error.message : 'Request body must be valid JSON.';
+    throw new HttpError(400, 'Bad Request', message);
+  }
+}
+
+async function withBadRequest<T>(callback: () => Promise<T> | T): Promise<T> {
+  try {
+    return await callback();
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+
+    const message = error instanceof Error ? error.message : 'Request body is invalid.';
     throw new HttpError(400, 'Bad Request', message);
   }
 }
