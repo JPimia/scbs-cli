@@ -1,5 +1,56 @@
 export type FreshnessState = 'fresh' | 'stale' | 'expired' | 'partial' | 'unknown';
 
+export interface ServiceCapability {
+  name:
+    | 'bundle-plan'
+    | 'receipt-ingest'
+    | 'freshness-check'
+    | 'view-rebuild'
+    | 'repo-registration'
+    | 'repo-change-report';
+  description: string;
+}
+
+export interface ApiSurface {
+  kind: 'local-durable';
+  baseUrl: string;
+  apiVersion: 'v1';
+  mode: 'dry-run';
+  capabilities: ServiceCapability[];
+}
+
+export interface StorageSurface {
+  adapter: 'local-json';
+  configPath: string;
+  statePath: string;
+  stateExists: boolean;
+}
+
+export interface InitReport {
+  mode: 'local-durable';
+  configPath: string;
+  statePath: string;
+  created: boolean;
+  configCreated: boolean;
+  stateCreated: boolean;
+}
+
+export interface ServeReport {
+  service: string;
+  status: 'ready';
+  api: ApiSurface;
+  storage: StorageSurface;
+}
+
+export interface MigrationReport {
+  adapter: 'local-json';
+  statePath: string;
+  applied: string[];
+  pending: number;
+  baselineVersion: string;
+  stateCreated: boolean;
+}
+
 export interface RepoRecord {
   id: string;
   name: string;
@@ -54,10 +105,13 @@ export interface ReceiptRecord {
 }
 
 export interface DoctorReport {
-  status: 'ok';
+  status: 'ok' | 'warn';
+  summary: string;
+  api: ApiSurface;
+  storage: StorageSurface;
   checks: Array<{
     name: string;
-    status: 'ok';
+    status: 'ok' | 'warn';
     detail: string;
   }>;
 }

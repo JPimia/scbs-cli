@@ -1,12 +1,16 @@
 import type {
+  ApiSurface,
   BundleRecord,
   ClaimRecord,
   DoctorReport,
   FactRecord,
   FreshnessImpact,
   FreshnessState,
+  InitReport,
+  MigrationReport,
   ReceiptRecord,
   RepoRecord,
+  ServeReport,
   ViewRecord,
 } from './types';
 
@@ -32,11 +36,11 @@ export interface ReceiptSubmitInput {
 }
 
 export interface ScbsService {
-  init(configPath: string): Promise<{ configPath: string; created: boolean }>;
-  serve(): Promise<{ endpoint: string; mode: 'dry-run' }>;
+  init(configPath: string): Promise<InitReport>;
+  serve(): Promise<ServeReport>;
   health(): Promise<{ status: 'ok'; service: string; version: string }>;
   doctor(): Promise<DoctorReport>;
-  migrate(): Promise<{ applied: string[]; pending: number }>;
+  migrate(): Promise<MigrationReport>;
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;
   showRepo(id: string): Promise<RepoRecord>;
@@ -65,3 +69,33 @@ export interface ScbsService {
   validateReceipt(id: string): Promise<ReceiptRecord>;
   rejectReceipt(id: string): Promise<ReceiptRecord>;
 }
+
+export const createApiCapabilities = (): ApiSurface['capabilities'] => [
+  {
+    name: 'bundle-plan',
+    description:
+      'Plan local bundle requests against registered repositories and materialized views.',
+  },
+  {
+    name: 'receipt-ingest',
+    description: 'Ingest and validate agent receipts against planned bundles.',
+  },
+  {
+    name: 'freshness-check',
+    description:
+      'Inspect bundle freshness, impacts, and recomputation status from the local store.',
+  },
+  {
+    name: 'view-rebuild',
+    description:
+      'Trigger local rebuilds for derived views when freshness or repo changes demand it.',
+  },
+  {
+    name: 'repo-registration',
+    description: 'Register and scan repositories that participate in the local SCBS surface.',
+  },
+  {
+    name: 'repo-change-report',
+    description: 'Report changed repository files to surface freshness impacts and rebuild work.',
+  },
+];

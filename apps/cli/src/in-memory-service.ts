@@ -5,15 +5,20 @@ import type {
   RepoChangesInput,
   ScbsService,
 } from './service';
+import { createApiCapabilities } from './service';
 import type {
+  ApiSurface,
   BundleRecord,
   ClaimRecord,
   DoctorReport,
   FactRecord,
   FreshnessImpact,
   FreshnessState,
+  InitReport,
+  MigrationReport,
   ReceiptRecord,
   RepoRecord,
+  ServeReport,
   ViewRecord,
 } from './types';
 
@@ -28,6 +33,7 @@ export interface SeedState {
 }
 
 const now = () => new Date().toISOString();
+const defaultEndpoint = 'http://127.0.0.1:8791';
 
 const slugify = (value: string) =>
   value
@@ -116,6 +122,14 @@ const requireById = <T extends { id: string }>(collection: T[], id: string, labe
   return match;
 };
 
+const createInMemoryApi = (): ApiSurface => ({
+  kind: 'local-durable',
+  baseUrl: defaultEndpoint,
+  apiVersion: 'v1',
+  mode: 'dry-run',
+  capabilities: createApiCapabilities(),
+});
+
 export class InMemoryScbsService implements ScbsService {
   private readonly state: SeedState;
 
@@ -123,12 +137,29 @@ export class InMemoryScbsService implements ScbsService {
     this.state = seedState ?? createSeedState();
   }
 
-  public async init(configPath: string) {
-    return { configPath, created: false };
+  public async init(configPath: string): Promise<InitReport> {
+    return {
+      mode: 'local-durable',
+      configPath,
+      statePath: '.scbs/state.json',
+      created: false,
+      configCreated: false,
+      stateCreated: false,
+    };
   }
 
-  public async serve() {
-    return { endpoint: 'http://0.0.0.0:8791', mode: 'dry-run' as const };
+  public async serve(): Promise<ServeReport> {
+    return {
+      service: 'scbs',
+      status: 'ready',
+      api: createInMemoryApi(),
+      storage: {
+        adapter: 'local-json',
+        configPath: 'config/scbs.config.yaml',
+        statePath: '.scbs/state.json',
+        stateExists: false,
+      },
+    };
   }
 
   public async health() {
@@ -138,23 +169,44 @@ export class InMemoryScbsService implements ScbsService {
   public async doctor(): Promise<DoctorReport> {
     return {
       status: 'ok',
+      summary:
+        'SCBS is running in in-memory bootstrap mode; no durable local state has been created.',
+      api: createInMemoryApi(),
+      storage: {
+        adapter: 'local-json',
+        configPath: 'config/scbs.config.yaml',
+        statePath: '.scbs/state.json',
+        stateExists: false,
+      },
       checks: [
         {
           name: 'config',
-          status: 'ok',
-          detail: 'Default config path is readable.',
+          status: 'warn',
+          detail: 'No durable config file is managed by the in-memory adapter.',
         },
         {
           name: 'storage',
           status: 'ok',
           detail: 'In-memory adapter active for CLI bootstrap mode.',
         },
+        {
+          name: 'api',
+          status: 'ok',
+          detail: `Dry-run API surface advertised at ${defaultEndpoint} with version v1.`,
+        },
       ],
     };
   }
 
-  public async migrate() {
-    return { applied: ['0001_init.sql'], pending: 9 };
+  public async migrate(): Promise<MigrationReport> {
+    return {
+      adapter: 'local-json',
+      statePath: '.scbs/state.json',
+      applied: [],
+      pending: 0,
+      baselineVersion: '0.1.0',
+      stateCreated: false,
+    };
   }
 
   public async registerRepo(input: RegisterRepoInput) {

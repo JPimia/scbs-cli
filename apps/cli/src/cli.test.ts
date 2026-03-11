@@ -38,4 +38,28 @@ describe('CLI parsing', () => {
       },
     });
   });
+
+  it('surfaces the operator-facing dry-run API contract for serve', async () => {
+    const result = await runCli(['serve', '--json'], new InMemoryScbsService());
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      command: 'serve',
+      data: {
+        service: 'scbs',
+        status: 'ready',
+        api: {
+          kind: 'local-durable',
+          apiVersion: 'v1',
+          mode: 'dry-run',
+        },
+        storage: {
+          adapter: 'local-json',
+          configPath: 'config/scbs.config.yaml',
+          statePath: '.scbs/state.json',
+        },
+      },
+    });
+  });
 });

@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readJsonFile, writeJsonFile } from '../../../packages/core/src/storage/json-store';
 import { InMemoryScbsService, type SeedState, createSeedState } from './in-memory-service';
+import { createApiCapabilities } from './service';
 import type {
   BundlePlanInput,
   ReceiptSubmitInput,
@@ -23,9 +24,26 @@ interface DurablePaths {
   statePath: string;
 }
 
-const defaultConfigContents = (statePath: string) => `storage:
+const SERVICE_VERSION = '0.1.0';
+const API_VERSION = 'v1' as const;
+const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_PORT = 8791;
+
+const defaultConfigContents = (statePath: string) => `service:
+  name: scbs
+  apiVersion: ${API_VERSION}
+  host: ${DEFAULT_HOST}
+  port: ${DEFAULT_PORT}
+
+storage:
   adapter: local-json
-  path: ${statePath}
+  statePath: ${statePath}
+
+features:
+  bundlePlanning: true
+  receiptIngestion: true
+  freshnessChecks: true
+  rebuildTriggers: true
 `;
 
 function resolveDurablePaths(options: DurableServiceOptions = {}): DurablePaths {
@@ -45,33 +63,92 @@ export class DurableScbsService implements ScbsService {
   }
 
   public async init(configPath: string) {
+    const resolvedConfigPath = this.resolveConfigPath(configPath);
     const configCreated = await this.ensureConfig(configPath);
     const stateCreated = await this.ensureState();
-    return { configPath, created: configCreated || stateCreated };
+    return {
+      mode: 'local-durable' as const,
+      configPath: this.toRelativePath(resolvedConfigPath),
+      statePath: this.toRelativePath(this.paths.statePath),
+      created: configCreated || stateCreated,
+      configCreated,
+      stateCreated,
+    };
   }
 
   public async serve() {
-    return { endpoint: 'http://0.0.0.0:8791', mode: 'dry-run' as const };
+    await this.ensureState();
+    return {
+      service: 'scbs',
+      status: 'ready' as const,
+      api: {
+        kind: 'local-durable' as const,
+        baseUrl: this.getBaseUrl(),
+        apiVersion: API_VERSION,
+        mode: 'dry-run' as const,
+        capabilities: createApiCapabilities(),
+      },
+      storage: {
+        adapter: 'local-json' as const,
+        configPath: this.toRelativePath(this.paths.configPath),
+        statePath: this.toRelativePath(this.paths.statePath),
+        stateExists: true,
+      },
+    };
   }
 
   public async health() {
-    return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
+    return { status: 'ok' as const, service: 'scbs', version: SERVICE_VERSION };
   }
 
   public async doctor() {
-    await this.ensureState();
+    const configExists = await this.pathExists(this.paths.configPath);
+    const stateExisted = await this.pathExists(this.paths.statePath);
+    if (!stateExisted) {
+      await this.ensureState();
+    }
+
     return {
-      status: 'ok' as const,
+      status: configExists ? ('ok' as const) : ('warn' as const),
+      summary: configExists
+        ? 'Local durable SCBS surface is ready with config and state paths resolved.'
+        : 'Local durable state is ready, but the default config file is missing. Run `scbs init` to materialize it.',
+      api: {
+        kind: 'local-durable' as const,
+        baseUrl: this.getBaseUrl(),
+        apiVersion: API_VERSION,
+        mode: 'dry-run' as const,
+        capabilities: createApiCapabilities(),
+      },
+      storage: {
+        adapter: 'local-json' as const,
+        configPath: this.toRelativePath(this.paths.configPath),
+        statePath: this.toRelativePath(this.paths.statePath),
+        stateExists: true,
+      },
       checks: [
         {
           name: 'config',
-          status: 'ok' as const,
-          detail: `Default config path is ${this.paths.configPath}.`,
+          status: configExists ? ('ok' as const) : ('warn' as const),
+          detail: configExists
+            ? `Config file is present at ${this.toRelativePath(this.paths.configPath)}.`
+            : `Config file is missing at ${this.toRelativePath(this.paths.configPath)}; run init to create the local durable config.`,
         },
         {
           name: 'storage',
           status: 'ok' as const,
-          detail: `Local durable adapter active at ${this.paths.statePath}.`,
+          detail: `Local durable adapter is active at ${this.toRelativePath(this.paths.statePath)}.`,
+        },
+        {
+          name: 'api',
+          status: 'ok' as const,
+          detail: `Dry-run API boundary advertised at ${this.getBaseUrl()} (${API_VERSION}).`,
+        },
+        {
+          name: 'capabilities',
+          status: 'ok' as const,
+          detail:
+            'Bundle planning, receipt ingestion, freshness checks, rebuild triggers, and repo operations are available through the CLI surface.',
         },
       ],
     };
@@ -79,7 +156,14 @@ export class DurableScbsService implements ScbsService {
 
   public async migrate() {
     const created = await this.ensureState();
-    return { applied: created ? ['0001_local_json_store'] : [], pending: 0 };
+    return {
+      adapter: 'local-json' as const,
+      statePath: this.toRelativePath(this.paths.statePath),
+      applied: created ? ['0001_local_json_store'] : [],
+      pending: 0,
+      baselineVersion: SERVICE_VERSION,
+      stateCreated: created,
+    };
   }
 
   public async registerRepo(input: RegisterRepoInput) {
@@ -211,9 +295,7 @@ export class DurableScbsService implements ScbsService {
   }
 
   private async ensureConfig(configPath: string): Promise<boolean> {
-    const absoluteConfigPath = path.isAbsolute(configPath)
-      ? configPath
-      : path.join(this.paths.cwd, configPath);
+    const absoluteConfigPath = this.resolveConfigPath(configPath);
     const contents = defaultConfigContents(this.paths.statePath);
 
     try {
@@ -231,6 +313,27 @@ export class DurableScbsService implements ScbsService {
       }
 
       throw error;
+    }
+  }
+
+  private resolveConfigPath(configPath: string): string {
+    return path.isAbsolute(configPath) ? configPath : path.join(this.paths.cwd, configPath);
+  }
+
+  private toRelativePath(targetPath: string): string {
+    return path.relative(this.paths.cwd, targetPath) || path.basename(targetPath);
+  }
+
+  private getBaseUrl(): string {
+    return `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+  }
+
+  private async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await access(targetPath);
+      return true;
+    } catch {
+      return false;
     }
   }
 }
