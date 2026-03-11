@@ -1,9 +1,12 @@
 import { deriveViews } from '../../../packages/core/src/views/service';
 import type {
   AgentReceipt,
+  DependencyEdge,
+  FileRecord,
   ClaimRecord as ProtocolClaimRecord,
   ViewRecord as ProtocolViewRecord,
   SourceAnchor,
+  SymbolRecord,
 } from '../../../packages/protocol/src/index';
 import { validateReceipt as validateStoredReceipt } from '../../../packages/receipts/src/validation';
 import type {
@@ -39,6 +42,12 @@ export interface SeedState {
   receipts: ReceiptRecord[];
   bundleCache: Array<{ key: string; bundleId: string; freshness: FreshnessState }>;
 }
+
+type GraphSeedState = SeedState & {
+  files?: FileRecord[];
+  symbols?: SymbolRecord[];
+  edges?: DependencyEdge[];
+};
 
 const now = () => new Date().toISOString();
 const defaultEndpoint = 'http://127.0.0.1:8791';
@@ -713,10 +722,19 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   private rebuildViewsForRepo(repoId: string): void {
+    const graphState = this.state as GraphSeedState;
     const protocolClaims = this.state.claims.map((claim) =>
       toProtocolClaim(claim as DurableClaimRecord)
     );
-    const repoViews = deriveViews(repoId, protocolClaims).map((view) => toDurableView(view));
+    const files = graphState.files ?? [];
+    const symbols = graphState.symbols ?? [];
+    const edges = graphState.edges ?? [];
+    const hasGraphInputs = files.length > 0 || symbols.length > 0 || edges.length > 0;
+    const repoViews = (
+      hasGraphInputs
+        ? deriveViews(repoId, files, symbols, protocolClaims, edges)
+        : deriveViews(repoId, protocolClaims)
+    ).map((view) => toDurableView(view));
     this.state.views = this.state.views
       .filter((view) => view.repoId !== repoId)
       .concat(repoViews as ViewRecord[]);

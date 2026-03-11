@@ -36,7 +36,19 @@ export class ReceiptService {
       this.store.claims.push(decision.promotedClaim);
       const affectedRepoIds = new Set([decision.promotedClaim.repoId]);
       for (const repoId of affectedRepoIds) {
-        const repoViews = deriveViews(repoId, this.store.claims);
+        const hasGraphInputs =
+          this.store.files.length > 0 ||
+          this.store.symbols.length > 0 ||
+          this.store.edges.length > 0;
+        const repoViews = hasGraphInputs
+          ? deriveViews(
+              repoId,
+              this.store.files,
+              this.store.symbols,
+              this.store.claims,
+              this.store.edges
+            )
+          : deriveViews(repoId, this.store.claims);
         this.store.views = this.store.views
           .filter((view) => view.repoId !== repoId)
           .concat(repoViews);

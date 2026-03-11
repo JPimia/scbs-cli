@@ -744,6 +744,58 @@ describe('core services', () => {
     expect(bundleResult.bundle.id).toBeTruthy();
   });
 
+  it('preserves graph-derived interface and subsystem views after receipt validation recomputes', async () => {
+    const rootPath = await mkdtemp(path.join(os.tmpdir(), 'scbs-receipt-graph-'));
+    await mkdir(path.join(rootPath, 'src'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'bun test' } }, null, 2)
+    );
+    await writeFile(
+      path.join(rootPath, 'src/index.ts'),
+      'import { readFile } from "node:fs/promises";\nexport function hello() { return readFile.name; }\n'
+    );
+
+    const { repository, services } = await registerAndScanRepository({
+      name: 'receipt-graph',
+      rootPath,
+    });
+
+    expect(
+      services.store.views.some(
+        (view) => view.repoId === repository.id && view.type === 'interface'
+      )
+    ).toBeTrue();
+    expect(
+      services.store.views.some(
+        (view) => view.repoId === repository.id && view.type === 'subsystem' && view.key === 'src'
+      )
+    ).toBeTrue();
+
+    const receipt = services.receipts.submit({
+      repoIds: [repository.id],
+      type: 'finding',
+      summary: 'Validated graph proof',
+      payload: { command: 'bun test' },
+    });
+
+    services.receipts.validate(receipt.id, [
+      { repoId: repository.id, filePath: 'src/index.ts', fileHash: 'abc' },
+    ]);
+
+    const repoViews = services.store.views.filter((view) => view.repoId === repository.id);
+    expect(repoViews.some((view) => view.type === 'interface')).toBeTrue();
+    expect(repoViews.some((view) => view.type === 'subsystem' && view.key === 'src')).toBeTrue();
+    expect(
+      repoViews.some(
+        (view) =>
+          view.type === 'file_scope' &&
+          view.claimIds.includes(`claim_from_${receipt.id}`) &&
+          view.fileScope?.includes('src/index.ts')
+      )
+    ).toBeTrue();
+  });
+
   it('marks only the changed repository stale when repos share a relative path', () => {
     const services = createCoreServices();
     const repoAlpha = services.repositories.register({ name: 'alpha', rootPath: '/tmp/alpha' });

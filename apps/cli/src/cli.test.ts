@@ -71,6 +71,7 @@ describe('CLI parsing', () => {
     });
   });
 
+<<<<<<< HEAD
   it('uses core planner semantics for postgres bundle planning', async () => {
     const services = createCoreServices();
     const repoAlpha = services.repositories.register({ name: 'alpha', rootPath: '/tmp/alpha' });
@@ -431,5 +432,192 @@ describe('CLI parsing', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('Option "--limit" must be a positive integer.');
+=======
+  it('preserves richer graph-derived views when receipt validation rebuilds repo views', async () => {
+    const repoId = 'repo_graph';
+    const seedState = {
+      repos: [
+        {
+          id: repoId,
+          name: 'graph',
+          path: '.',
+          status: 'scanned',
+          lastScannedAt: null,
+        },
+      ],
+      facts: [],
+      claims: [
+        {
+          id: 'claim_interface',
+          repoId,
+          statement: 'src/index.ts exports hello',
+          factIds: ['fact_symbol'],
+          freshness: 'fresh',
+          text: 'src/index.ts exports hello',
+          type: 'observed',
+          confidence: 1,
+          trustTier: 'source',
+          anchors: [
+            {
+              repoId,
+              filePath: 'src/index.ts',
+              fileHash: 'hash-src',
+              symbolId: 'symbol_hello',
+            },
+          ],
+          invalidationKeys: ['src/index.ts'],
+          metadata: {
+            filePath: 'src/index.ts',
+            claimKind: 'file_interface',
+            symbolNames: ['hello'],
+            edgeIds: ['edge_contains'],
+          },
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'claim_import',
+          repoId,
+          statement: 'src/index.ts imports node:fs/promises',
+          factIds: ['fact_import'],
+          freshness: 'fresh',
+          text: 'src/index.ts imports node:fs/promises',
+          type: 'observed',
+          confidence: 1,
+          trustTier: 'source',
+          anchors: [{ repoId, filePath: 'src/index.ts', fileHash: 'hash-src' }],
+          invalidationKeys: ['src/index.ts'],
+          metadata: {
+            filePath: 'src/index.ts',
+            claimKind: 'file_import',
+            importPath: 'node:fs/promises',
+            isExternal: true,
+          },
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      views: [
+        {
+          id: 'view_interface',
+          repoId,
+          name: 'Interface src/index.ts',
+          claimIds: ['claim_interface'],
+          freshness: 'fresh',
+          type: 'interface',
+          key: 'src/index.ts',
+          title: 'Interface src/index.ts',
+          summary: 'existing interface view',
+          fileScope: ['src/index.ts'],
+          symbolScope: ['hello'],
+          metadata: {},
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'view_subsystem',
+          repoId,
+          name: 'Subsystem src',
+          claimIds: ['claim_interface', 'claim_import'],
+          freshness: 'fresh',
+          type: 'subsystem',
+          key: 'src',
+          title: 'Subsystem src',
+          summary: 'existing subsystem view',
+          fileScope: ['src/index.ts'],
+          symbolScope: ['hello'],
+          metadata: {},
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      bundles: [
+        {
+          id: 'bundle_graph',
+          repoIds: [repoId],
+          task: 'graph bundle',
+          viewIds: ['view_interface', 'view_subsystem'],
+          freshness: 'fresh',
+          fileScope: ['src/index.ts'],
+          symbolScope: ['hello'],
+        },
+      ],
+      receipts: [
+        {
+          id: 'receipt_graph',
+          bundleId: 'bundle_graph',
+          agent: 'agent-1',
+          summary: 'validated graph proof',
+          status: 'pending',
+        },
+      ],
+      bundleCache: [],
+      files: [
+        {
+          id: 'file_src_index',
+          repoId,
+          path: 'src/index.ts',
+          hash: 'hash-src',
+          language: 'typescript',
+          versionStamp: 'hash-src',
+          scannedAt: '',
+        },
+      ],
+      symbols: [
+        {
+          id: 'symbol_hello',
+          repoId,
+          fileId: 'file_src_index',
+          name: 'hello',
+          kind: 'function',
+          exported: true,
+          signature: 'function hello(): string',
+          line: 1,
+          column: 1,
+        },
+      ],
+      edges: [
+        {
+          id: 'edge_contains',
+          repoId,
+          fromType: 'file',
+          fromId: 'file_src_index',
+          toType: 'symbol',
+          toId: 'symbol_hello',
+          edgeType: 'contains',
+        },
+        {
+          id: 'edge_imports',
+          repoId,
+          fromType: 'file',
+          fromId: 'file_src_index',
+          toType: 'file',
+          toId: 'dep_node_fs_promises',
+          edgeType: 'imports',
+          metadata: { importPath: 'node:fs/promises', isExternal: true },
+        },
+      ],
+    } as unknown as SeedState;
+
+    const service = new InMemoryScbsService(seedState);
+    await service.validateReceipt('receipt_graph');
+
+    const views = (await service.listViews()) as Array<
+      Awaited<ReturnType<InMemoryScbsService['listViews']>>[number] & {
+        type?: string;
+        fileScope?: string[];
+      }
+    >;
+    expect(views.some((view) => view.repoId === repoId && view.type === 'interface')).toBe(true);
+    expect(views.some((view) => view.repoId === repoId && view.type === 'subsystem')).toBe(true);
+    expect(
+      views.some(
+        (view) =>
+          view.repoId === repoId &&
+          view.claimIds.includes('claim_from_receipt_graph') &&
+          view.fileScope?.includes('src/index.ts')
+      )
+    ).toBe(true);
+>>>>>>> 255b468 (Fix receipt view recompute for graph-derived views)
   });
 });
