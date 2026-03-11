@@ -20,7 +20,7 @@ export function updateClaimFreshness(
     staleSet.has(claim.id)
       ? {
           ...claim,
-          freshness: 'stale',
+          freshness: claim.freshness === 'expired' ? 'expired' : 'stale',
         }
       : claim
   );

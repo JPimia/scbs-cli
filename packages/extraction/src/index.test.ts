@@ -29,6 +29,7 @@ describe('extractRepository', () => {
     };
 
     const result = await extractRepository(repository);
+    const repeated = await extractRepository(repository);
 
     expect(result.files.map((file) => file.path)).toEqual(['package.json', 'src/index.ts']);
     expect(result.commands.map((entry) => entry.source)).toEqual([
@@ -37,5 +38,10 @@ describe('extractRepository', () => {
     ]);
     expect(result.symbols.map((symbol) => symbol.name)).toEqual(['hello']);
     expect(result.facts.some((fact) => fact.type === 'script_command')).toBeTrue();
+    expect(result.files.map((file) => file.id)).toEqual(repeated.files.map((file) => file.id));
+    expect(result.symbols.map((symbol) => symbol.id)).toEqual(
+      repeated.symbols.map((symbol) => symbol.id)
+    );
+    expect(result.facts.map((fact) => fact.id)).toEqual(repeated.facts.map((fact) => fact.id));
   });
 });

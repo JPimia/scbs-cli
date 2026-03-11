@@ -13,9 +13,21 @@ export function validateReceipt(
   if (anchors.length === 0) {
     throw new Error('Validated receipts require at least one source anchor');
   }
+  const mismatchedAnchor = anchors.find((anchor) => !receipt.repoIds.includes(anchor.repoId));
+  if (mismatchedAnchor) {
+    throw new Error(`Anchor repo ${mismatchedAnchor.repoId} is not part of receipt scope`);
+  }
+  const invalidationKeys = [...new Set(anchors.map((anchor) => anchor.filePath))];
 
   const validatedReceipt: AgentReceipt = {
     ...receipt,
+    payload: {
+      ...receipt.payload,
+      validation: {
+        anchors,
+        invalidationKeys,
+      },
+    },
     status: 'validated',
     updatedAt: now.toISOString(),
   };
@@ -30,10 +42,14 @@ export function validateReceipt(
     factIds: [],
     anchors,
     freshness: 'partial',
-    invalidationKeys: anchors.map((anchor) => anchor.filePath),
+    invalidationKeys,
     metadata: {
       receiptId: receipt.id,
       receiptType: receipt.type,
+      bundleId: receipt.bundleId,
+      fromRole: receipt.fromRole,
+      claimKind: 'validated_receipt',
+      filePath: invalidationKeys[0],
     },
     createdAt: receipt.createdAt,
     updatedAt: now.toISOString(),

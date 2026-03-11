@@ -19,11 +19,13 @@ export function createCoreServices() {
     receipts: new ReceiptService(store),
     cache: new BundleCacheService(store),
     derive(repoId: string) {
-      store.claims = deriveClaims(repoId, store.facts);
-      store.views = deriveViews(repoId, store.claims);
+      const repoClaims = deriveClaims(repoId, store.facts);
+      store.claims = store.claims.filter((claim) => claim.repoId !== repoId).concat(repoClaims);
+      const repoViews = deriveViews(repoId, store.claims);
+      store.views = store.views.filter((view) => view.repoId !== repoId).concat(repoViews);
       return {
-        claims: store.claims,
-        views: store.views,
+        claims: repoClaims,
+        views: repoViews,
       };
     },
   };

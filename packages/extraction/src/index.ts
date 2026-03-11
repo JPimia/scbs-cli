@@ -17,7 +17,7 @@ import {
 } from './parsers';
 import { scanRepositoryFiles } from './scanners';
 import type { ExtractionOptions, RepositoryScanResult } from './types';
-import { createId, nowIso, stableHash } from './utils';
+import { deterministicId, nowIso, stableHash } from './utils';
 
 export async function extractRepository(
   repository: RepositoryRef,
@@ -39,7 +39,7 @@ export async function extractRepository(
   for (const scanFile of scanFiles) {
     const hash = stableHash(scanFile.content);
     const { language, kind } = classifyFile(scanFile.relativePath);
-    const fileId = createId('file');
+    const fileId = deterministicId('file', repository.id, scanFile.relativePath);
     const fileRecord: FileRecord = {
       id: fileId,
       repoId: repository.id,
@@ -59,7 +59,7 @@ export async function extractRepository(
 
     const fileAnchor = makeAnchor(repository.id, scanFile.relativePath, hash, 1);
     facts.push({
-      id: createId('fact'),
+      id: deterministicId('fact', repository.id, 'file_hash', scanFile.relativePath, hash),
       repoId: repository.id,
       type: 'file_hash',
       subjectType: 'file',
@@ -80,13 +80,21 @@ export async function extractRepository(
     for (const entry of discoverPackageCommands(scanFile.relativePath, scanFile.content)) {
       commands.push(entry);
       facts.push({
-        id: createId('fact'),
+        id: deterministicId(
+          'fact',
+          repository.id,
+          'script_command',
+          scanFile.relativePath,
+          entry.source,
+          hash
+        ),
         repoId: repository.id,
         type: 'script_command',
         subjectType: entry.kind === 'test' ? 'test' : 'script',
         subjectId: fileId,
         value: {
           path: scanFile.relativePath,
+          scriptName: entry.source.split('#').at(-1),
           source: entry.source,
           command: entry.command,
         },
@@ -103,20 +111,35 @@ export async function extractRepository(
     }
 
     for (const discoveredImport of discoverImports(scanFile.content)) {
+      const importTargetId = deterministicId('file_ref', repository.id, discoveredImport);
       edges.push({
-        id: createId('edge'),
+        id: deterministicId(
+          'edge',
+          repository.id,
+          fileId,
+          'imports',
+          importTargetId,
+          discoveredImport
+        ),
         repoId: repository.id,
         fromType: 'file',
         fromId: fileId,
         toType: 'file',
-        toId: stableHash(path.posix.normalize(discoveredImport)),
+        toId: importTargetId,
         edgeType: 'imports',
         metadata: { importPath: discoveredImport },
       });
     }
 
     for (const exportedSymbol of discoverExports(scanFile.content)) {
-      const symbolId = createId('sym');
+      const symbolId = deterministicId(
+        'sym',
+        repository.id,
+        scanFile.relativePath,
+        exportedSymbol.name,
+        exportedSymbol.kind,
+        exportedSymbol.line
+      );
       const anchor = makeAnchor(repository.id, scanFile.relativePath, hash, exportedSymbol.line);
       const symbolRecord: SymbolRecord = {
         id: symbolId,
@@ -131,7 +154,15 @@ export async function extractRepository(
       };
       symbols.push(symbolRecord);
       facts.push({
-        id: createId('fact'),
+        id: deterministicId(
+          'fact',
+          repository.id,
+          'symbol_def',
+          scanFile.relativePath,
+          exportedSymbol.name,
+          exportedSymbol.kind,
+          hash
+        ),
         repoId: repository.id,
         type: 'symbol_def',
         subjectType: 'symbol',
@@ -148,7 +179,7 @@ export async function extractRepository(
         updatedAt: nowIso(scanTime),
       });
       edges.push({
-        id: createId('edge'),
+        id: deterministicId('edge', repository.id, fileId, 'contains', symbolId),
         repoId: repository.id,
         fromType: 'file',
         fromId: fileId,

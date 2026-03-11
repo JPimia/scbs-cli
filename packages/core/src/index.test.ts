@@ -23,16 +23,19 @@ describe('core services', () => {
     expect(services.store.files.length).toBe(2);
     expect(services.store.claims.length).toBeGreaterThan(0);
     expect(services.store.views.length).toBeGreaterThan(0);
+    expect(services.store.views.some((view) => view.type === 'command_workflow')).toBeTrue();
 
     const result = planBundle(services, {
       id: 'req_1',
       taskTitle: 'Inspect fixture',
       repoIds: [repository.id],
       fileScope: ['src/index.ts'],
-      constraints: { includeCommands: true },
+      constraints: { includeCommands: true, includeProofHandles: true },
     });
 
     expect(result.bundle.fileScope).toContain('src/index.ts');
+    expect(result.bundle.commands).toContain('bun test');
+    expect(result.bundle.proofHandles.length).toBeGreaterThan(0);
     expect(services.cache.get(result.bundle.cacheKey ?? '')?.id).toBe(result.bundle.id);
   });
 
@@ -103,6 +106,14 @@ describe('core services', () => {
       { repoId: repo.id, filePath: 'src/index.ts', fileHash: 'abc' },
     ]);
     expect(validated.status).toBe('validated');
+    expect(services.receipts.promotedClaims()[0]?.anchors[0]?.filePath).toBe('src/index.ts');
+    expect(
+      services.store.views.some(
+        (view) =>
+          view.claimIds.includes(`claim_from_${receipt.id}`) &&
+          view.fileScope?.[0] === 'src/index.ts'
+      )
+    ).toBeTrue();
     expect(bundleResult.bundle.id).toBeTruthy();
   });
 });

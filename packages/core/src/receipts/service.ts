@@ -8,6 +8,7 @@ import {
 
 import type { CoreStore } from '../storage/memory-store';
 import { createId } from '../utils';
+import { deriveViews } from '../views/service';
 
 export class ReceiptService {
   constructor(private readonly store: CoreStore) {}
@@ -33,6 +34,13 @@ export class ReceiptService {
     );
     if (decision.promotedClaim) {
       this.store.claims.push(decision.promotedClaim);
+      const affectedRepoIds = new Set([decision.promotedClaim.repoId]);
+      for (const repoId of affectedRepoIds) {
+        const repoViews = deriveViews(repoId, this.store.claims);
+        this.store.views = this.store.views
+          .filter((view) => view.repoId !== repoId)
+          .concat(repoViews);
+      }
     }
     return decision.receipt;
   }
