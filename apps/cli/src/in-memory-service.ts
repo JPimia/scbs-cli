@@ -202,7 +202,6 @@ const toDurableView = (view: ProtocolViewRecord): DurableViewRecord =>
     createdAt: view.createdAt,
     updatedAt: view.updatedAt,
   }) as DurableViewRecord;
-
 export const createSeedState = (): SeedState => {
   const repoId = 'repo_local-default';
   const factId = 'fact_repo-layout';

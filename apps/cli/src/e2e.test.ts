@@ -647,6 +647,15 @@ describe('CLI happy path', () => {
       id: 'receipt_agent-2-failed-proof',
       status: 'rejected',
     });
+
+    const persistedServiceAfterReject = createDurableScbsService({ cwd });
+    await expect(persistedServiceAfterReject.listClaims()).resolves.not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'claim_from_receipt_agent-2-failed-proof',
+        }),
+      ])
+    );
     const invalidJsonResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
       rawBody: '{bad json',
