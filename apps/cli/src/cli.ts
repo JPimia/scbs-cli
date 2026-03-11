@@ -1,6 +1,7 @@
 import { printValue, toJson } from './format';
 import type {
   BundlePlanInput,
+  FreshnessWorkerInput,
   ReceiptSubmitInput,
   RegisterRepoInput,
   RepoChangesInput,
@@ -195,6 +196,15 @@ const commandDefinitions: CommandDefinition[] = [
     path: ['freshness', 'recompute'],
     description: 'Recompute freshness state',
     run: ({ service }) => service.recomputeFreshness(),
+  },
+  {
+    path: ['freshness', 'worker'],
+    description: 'Drain queued freshness recompute work',
+    options: [{ name: 'limit', type: 'string', required: true }],
+    run: ({ service, values }) =>
+      runFreshnessWorkerCommand(service, {
+        limit: parsePositiveInteger(getRequiredString(values, 'limit'), '--limit'),
+      } satisfies FreshnessWorkerInput),
   },
   {
     path: ['freshness', 'status'],
@@ -394,4 +404,28 @@ const getOptionalCsv = (
 ): string[] | undefined => {
   const value = values[key];
   return value === undefined ? undefined : asCsv(value);
+};
+
+const parsePositiveInteger = (value: string, optionName: string): number => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Option "${optionName}" must be a positive integer.`);
+  }
+
+  return parsed;
+};
+
+const runFreshnessWorkerCommand = async (service: ScbsService, input: FreshnessWorkerInput) => {
+  if (service.runFreshnessWorker) {
+    return service.runFreshnessWorker(input);
+  }
+
+  const result = await service.recomputeFreshness();
+  return {
+    claimed: result.updated,
+    processed: result.updated,
+    succeeded: result.updated,
+    failed: 0,
+    updated: result.updated,
+  };
 };

@@ -347,6 +347,43 @@ describe('CLI happy path', () => {
     );
   });
 
+  it('runs bounded freshness worker passes against the local durable adapter', async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-worker-local-'));
+    const service = createDurableScbsService({ cwd });
+    const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
+    const firstBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
+    const secondBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh api' });
+
+    await service.expireBundle(firstBundle.id);
+    await service.expireBundle(secondBundle.id);
+
+    const firstPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
+    expect(firstPass.exitCode).toBe(0);
+    expect(JSON.parse(firstPass.stdout)).toMatchObject({
+      data: {
+        claimed: 1,
+        processed: 1,
+        succeeded: 1,
+        failed: 0,
+        updated: 1,
+      },
+    });
+    await expect(service.getFreshnessStatus()).resolves.toMatchObject({ staleArtifacts: 1 });
+
+    const secondPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
+    expect(secondPass.exitCode).toBe(0);
+    expect(JSON.parse(secondPass.stdout)).toMatchObject({
+      data: {
+        claimed: 1,
+        processed: 1,
+        succeeded: 1,
+        failed: 0,
+        updated: 1,
+      },
+    });
+    await expect(service.getFreshnessStatus()).resolves.toMatchObject({ staleArtifacts: 0 });
+  });
+
   it('starts a reachable HTTP surface for the real serve entrypoint', async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-serve-'));
     const setupService = createDurableScbsService({ cwd });
@@ -617,23 +654,59 @@ describePostgres('CLI PostgreSQL freshness recompute jobs', () => {
     });
   });
 
-  it('drains PostgreSQL recompute jobs to completion without widening the target set', async () => {
+  it('drains PostgreSQL recompute jobs through the bounded worker command', async () => {
     await withTempPostgresDatabase(async (databaseUrl) => {
       const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-drain-'));
       const service = createDurableScbsService({ cwd, databaseUrl });
       const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
-      const targetedBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
-      const untouchedBundle = await service.planBundle({ repoIds: [repo.id], task: 'keep warm' });
+      const firstBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
+      const secondBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh api' });
 
-      await service.expireBundle(targetedBundle.id);
+      await service.expireBundle(firstBundle.id);
+      await service.expireBundle(secondBundle.id);
 
-      await expect(service.recomputeFreshness()).resolves.toMatchObject({ updated: 1 });
-      await expect(service.showBundle(targetedBundle.id)).resolves.toMatchObject({
-        id: targetedBundle.id,
+      const firstPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
+      expect(firstPass.exitCode).toBe(0);
+      expect(JSON.parse(firstPass.stdout)).toMatchObject({
+        data: {
+          claimed: 1,
+          processed: 1,
+          succeeded: 1,
+          failed: 0,
+          updated: 1,
+        },
+      });
+      await expect(service.showBundle(firstBundle.id)).resolves.toMatchObject({
+        id: firstBundle.id,
         freshness: 'fresh',
       });
-      await expect(service.showBundle(untouchedBundle.id)).resolves.toMatchObject({
-        id: untouchedBundle.id,
+      await expect(service.showBundle(secondBundle.id)).resolves.toMatchObject({
+        id: secondBundle.id,
+        freshness: 'expired',
+      });
+      await expect(
+        queryRows(
+          databaseUrl,
+          'SELECT bundle_id, status FROM freshness_recompute_jobs ORDER BY requested_at, id;'
+        )
+      ).resolves.toEqual([
+        [firstBundle.id, 'completed'],
+        [secondBundle.id, 'pending'],
+      ]);
+
+      const secondPass = await runCli(['freshness', 'worker', '--limit', '1', '--json'], service);
+      expect(secondPass.exitCode).toBe(0);
+      expect(JSON.parse(secondPass.stdout)).toMatchObject({
+        data: {
+          claimed: 1,
+          processed: 1,
+          succeeded: 1,
+          failed: 0,
+          updated: 1,
+        },
+      });
+      await expect(service.showBundle(secondBundle.id)).resolves.toMatchObject({
+        id: secondBundle.id,
         freshness: 'fresh',
       });
       await expect(
@@ -641,7 +714,10 @@ describePostgres('CLI PostgreSQL freshness recompute jobs', () => {
           databaseUrl,
           'SELECT bundle_id, status FROM freshness_recompute_jobs ORDER BY requested_at, id;'
         )
-      ).resolves.toEqual([[targetedBundle.id, 'completed']]);
+      ).resolves.toEqual([
+        [firstBundle.id, 'completed'],
+        [secondBundle.id, 'completed'],
+      ]);
     });
   });
 });

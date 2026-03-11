@@ -39,6 +39,18 @@ export interface ReceiptSubmitInput {
   summary: string;
 }
 
+export interface FreshnessWorkerInput {
+  limit: number;
+}
+
+export interface FreshnessWorkerResult {
+  claimed: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  updated: number;
+}
+
 export interface ScbsService {
   init(configPath: string): Promise<InitReport>;
   serve(): Promise<ServeReport>;
@@ -66,6 +78,7 @@ export interface ScbsService {
   clearBundleCache(): Promise<{ cleared: number }>;
   getFreshnessImpacts(): Promise<FreshnessImpact[]>;
   recomputeFreshness(): Promise<{ updated: number }>;
+  runFreshnessWorker?(input: FreshnessWorkerInput): Promise<FreshnessWorkerResult>;
   getFreshnessStatus(): Promise<{ overall: FreshnessState; staleArtifacts: number }>;
   submitReceipt(input: ReceiptSubmitInput): Promise<ReceiptRecord>;
   listReceipts(): Promise<ReceiptRecord[]>;

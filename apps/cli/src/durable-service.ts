@@ -22,6 +22,8 @@ import { InMemoryScbsService, type SeedState, createSeedState } from './in-memor
 import { createApiCapabilities } from './service';
 import type {
   BundlePlanInput,
+  FreshnessWorkerInput,
+  FreshnessWorkerResult,
   ReceiptSubmitInput,
   RegisterRepoInput,
   RepoChangesInput,
@@ -69,6 +71,7 @@ interface FreshnessRecomputeJob {
 }
 
 const quoteLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
+const MAX_PSQL_LIMIT = 2_147_483_647;
 
 const defaultConfigContents = (
   statePath: string,
@@ -124,7 +127,12 @@ class PostgresFreshnessJobStore {
     `);
   }
 
-  public async claimPendingJobs(): Promise<FreshnessRecomputeJob[]> {
+  public async claimPendingJobs(limit: number): Promise<FreshnessRecomputeJob[]> {
+    const boundedLimit = Math.max(0, Math.min(Math.trunc(limit), MAX_PSQL_LIMIT));
+    if (boundedLimit === 0) {
+      return [];
+    }
+
     const rows = await this.queryRows(`
       WITH claimed AS (
         SELECT id
@@ -132,6 +140,7 @@ class PostgresFreshnessJobStore {
         WHERE status = 'pending'
         ORDER BY requested_at, id
         FOR UPDATE SKIP LOCKED
+        LIMIT ${boundedLimit}
       )
       UPDATE freshness_recompute_jobs AS jobs
       SET status = 'processing',
@@ -949,27 +958,39 @@ export class DurableScbsService implements ScbsService {
       });
     }
 
-    const jobs = await this.postgresJobs.claimPendingJobs();
-    let updated = 0;
-    for (const job of jobs) {
-      try {
-        const result = await this.withPostgresMutation(backend, async (store) => {
-          const bundle = requireById(store.bundles, job.bundleId, 'Bundle');
-          if (bundle.freshness !== 'fresh') {
-            bundle.freshness = 'fresh';
-            return { updated: 1 };
-          }
-          return { updated: 0 };
-        });
-        updated += result.updated;
-        await this.postgresJobs.completeJob(job.id);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await this.postgresJobs.failJob(job.id, message);
-        throw error;
-      }
+    const result = await this.runClaimedFreshnessJobs(backend, Number.MAX_SAFE_INTEGER);
+    return { updated: result.updated };
+  }
+
+  public async runFreshnessWorker(input: FreshnessWorkerInput): Promise<FreshnessWorkerResult> {
+    const limit = Math.max(0, Math.trunc(input.limit));
+    if (limit === 0) {
+      return { claimed: 0, processed: 0, succeeded: 0, failed: 0, updated: 0 };
     }
-    return { updated };
+
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation(async (service) => {
+        const staleBundleIds = (await service.getFreshnessImpacts())
+          .filter((impact) => impact.state !== 'fresh')
+          .slice(0, limit)
+          .map((impact) => impact.artifactId);
+        const result = await service.recomputeBundles(staleBundleIds);
+        return {
+          claimed: staleBundleIds.length,
+          processed: staleBundleIds.length,
+          succeeded: staleBundleIds.length,
+          failed: 0,
+          updated: result.updated,
+        };
+      });
+    }
+
+    if (!this.postgresJobs) {
+      return { claimed: 0, processed: 0, succeeded: 0, failed: 0, updated: 0 };
+    }
+
+    return this.runClaimedFreshnessJobs(backend, limit);
   }
 
   public async getFreshnessStatus() {
@@ -1224,6 +1245,48 @@ export class DurableScbsService implements ScbsService {
     } catch {
       return false;
     }
+  }
+
+  private async runClaimedFreshnessJobs(
+    backend: PostgresBackend,
+    limit: number
+  ): Promise<FreshnessWorkerResult> {
+    const jobs = await this.postgresJobs?.claimPendingJobs(limit);
+    if (!jobs?.length) {
+      return { claimed: 0, processed: 0, succeeded: 0, failed: 0, updated: 0 };
+    }
+
+    let succeeded = 0;
+    let failed = 0;
+    let updated = 0;
+
+    for (const job of jobs) {
+      try {
+        const result = await this.withPostgresMutation(backend, async (store) => {
+          const bundle = requireById(store.bundles, job.bundleId, 'Bundle');
+          if (bundle.freshness !== 'fresh') {
+            bundle.freshness = 'fresh';
+            return { updated: 1 };
+          }
+          return { updated: 0 };
+        });
+        updated += result.updated;
+        succeeded += 1;
+        await this.postgresJobs?.completeJob(job.id);
+      } catch (error) {
+        failed += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        await this.postgresJobs?.failJob(job.id, message);
+      }
+    }
+
+    return {
+      claimed: jobs.length,
+      processed: jobs.length,
+      succeeded,
+      failed,
+      updated,
+    };
   }
 }
 

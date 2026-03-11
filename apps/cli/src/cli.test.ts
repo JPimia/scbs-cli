@@ -8,6 +8,7 @@ import { createCoreServices, planBundle as planCoreBundle } from '../../../packa
 import { runCli } from './cli';
 import { DurableScbsService } from './durable-service';
 import { InMemoryScbsService } from './in-memory-service';
+import type { FreshnessWorkerResult, ScbsService } from './service';
 
 describe('CLI parsing', () => {
   it('returns JSON for commands with --json', async () => {
@@ -396,5 +397,39 @@ describe('CLI parsing', () => {
     await expect(service.serve()).rejects.toThrow(
       'PostgreSQL durable storage initialization failed: connect failed'
     );
+  });
+
+  it('routes freshness worker commands with a parsed integer limit', async () => {
+    const service = Object.assign(new InMemoryScbsService(), {
+      runFreshnessWorker: async ({ limit }: { limit: number }) => ({
+        claimed: limit,
+        processed: limit,
+        succeeded: limit,
+        failed: 0,
+        updated: limit,
+      }),
+    }) as ScbsService & {
+      runFreshnessWorker: (input: { limit: number }) => Promise<FreshnessWorkerResult>;
+    };
+
+    const result = await runCli(['freshness', 'worker', '--limit', '2', '--json'], service);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      data: {
+        claimed: 2,
+        processed: 2,
+        succeeded: 2,
+        failed: 0,
+        updated: 2,
+      },
+    });
+  });
+
+  it('rejects non-positive freshness worker limits', async () => {
+    const result = await runCli(['freshness', 'worker', '--limit', '0'], new InMemoryScbsService());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('Option "--limit" must be a positive integer.');
   });
 });
