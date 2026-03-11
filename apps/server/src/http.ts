@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
+  mapBundleRecordToMissionControlStatus,
+  mapMissionControlTaskToBundlePlanInput,
+} from '../../../packages/adapter-mission-control/src/index';
+import {
   mapBundleRecordToSisuBundleSnapshot,
   mapReceiptRecordToSisuReceiptSnapshot,
   mapSisuBundlePlanJobToBundlePlanInput,
@@ -9,6 +13,7 @@ import {
 import {
   buildApiIndex,
   normalizeBundlePlanInput,
+  normalizeMissionControlTaskEnvelope,
   normalizeReceiptSubmitInput,
   normalizeRegisterRepoInput,
   normalizeRepoChangesInput,
@@ -101,6 +106,17 @@ const routeHandlers = new Map<string, RouteHandler>([
       body: await service.planBundle(
         await withBadRequest(async () => normalizeBundlePlanInput(await readJsonBody(request)))
       ),
+    }),
+  ],
+  [
+    'POST /api/v1/integrations/mission-control/repo-sync',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await withBadRequest(async () => {
+        const task = normalizeMissionControlTaskEnvelope(await readJsonBody(request));
+        const bundle = await service.planBundle(mapMissionControlTaskToBundlePlanInput(task));
+        return mapBundleRecordToMissionControlStatus(bundle, task.missionId);
+      }),
     }),
   ],
   [

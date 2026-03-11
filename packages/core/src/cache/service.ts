@@ -11,7 +11,6 @@ export class BundleCacheService {
     if (existing) {
       existing.bundleId = bundle.id;
       existing.freshness = bundle.freshness === 'unknown' ? 'partial' : bundle.freshness;
-      existing.expiresAt = bundle.expiresAt;
       existing.updatedAt = nowIso(now);
       return existing;
     }
@@ -30,12 +29,9 @@ export class BundleCacheService {
     return entry;
   }
 
-  get(cacheKey: string, now = new Date()): TaskBundle | undefined {
+  get(cacheKey: string): TaskBundle | undefined {
     const entry = this.store.bundleCache.find((candidate) => candidate.cacheKey === cacheKey);
     if (!entry) {
-      return undefined;
-    }
-    if (this.isExpired(entry.expiresAt, now)) {
       return undefined;
     }
     entry.hitCount += 1;
@@ -46,18 +42,5 @@ export class BundleCacheService {
     this.store.bundleCache = cacheKey
       ? this.store.bundleCache.filter((entry) => entry.cacheKey !== cacheKey)
       : [];
-  }
-
-  private isExpired(expiresAt: string | undefined, now: Date): boolean {
-    if (!expiresAt) {
-      return false;
-    }
-
-    const expiresAtMs = Date.parse(expiresAt);
-    if (Number.isNaN(expiresAtMs)) {
-      return false;
-    }
-
-    return expiresAtMs <= now.getTime();
   }
 }

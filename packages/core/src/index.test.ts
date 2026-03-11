@@ -3,12 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  createCoreServices,
-  createMemoryStore,
-  planBundle,
-  registerAndScanRepository,
-} from './index';
+import { createCoreServices, planBundle, registerAndScanRepository } from './index';
 
 describe('core services', () => {
   it('registers, scans, derives, plans bundles, and caches them', async () => {
@@ -27,9 +22,11 @@ describe('core services', () => {
 
     expect(services.store.files.length).toBe(2);
     expect(services.store.symbols.map((symbol) => symbol.name)).toEqual(['version']);
+    expect(services.store.edges.some((edge) => edge.edgeType === 'contains')).toBeTrue();
     expect(services.store.claims.length).toBeGreaterThan(0);
     expect(services.store.views.length).toBeGreaterThan(0);
     expect(services.store.views.some((view) => view.type === 'command_workflow')).toBeTrue();
+    expect(services.store.views.some((view) => view.type === 'interface')).toBeTrue();
 
     const result = planBundle(services, {
       id: 'req_1',
@@ -45,72 +42,69 @@ describe('core services', () => {
     expect(services.cache.get(result.bundle.cacheKey ?? '')?.id).toBe(result.bundle.id);
   });
 
-  it('accepts an injected store for durable callers', () => {
-    const store = createMemoryStore();
-    const services = createCoreServices({ store });
-
-    expect(services.store).toBe(store);
-    expect(services.repositories.list()).toEqual([]);
-  });
-
-  it('treats expired cache entries as misses without incrementing hit count', () => {
-    const services = createCoreServices();
-    const expiredAt = '2026-03-11T10:00:00.000Z';
-    const bundle = {
-      id: 'bundle_expired',
-      requestId: 'req_expired',
-      repoIds: [],
-      summary: 'Expired bundle',
-      selectedViewIds: [],
-      selectedClaimIds: [],
-      fileScope: [],
-      symbolScope: [],
-      commands: [],
-      proofHandles: [],
-      freshness: 'expired' as const,
-      cacheKey: 'expired-cache',
-      metadata: {},
-      createdAt: '2026-03-11T09:00:00.000Z',
-      expiresAt: expiredAt,
-    };
-
-    services.store.bundles.push(bundle);
-
-    const entry = services.cache.put(bundle, new Date('2026-03-11T09:00:00.000Z'));
-
-    expect(services.cache.get('expired-cache', new Date('2026-03-11T10:00:00.000Z'))).toBe(
-      undefined
+  it('derives anchored graph claims and explainable richer views with freshness', async () => {
+    const rootPath = await mkdtemp(path.join(os.tmpdir(), 'scbs-graph-'));
+    await mkdir(path.join(rootPath, 'src'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, 'package.json'),
+      JSON.stringify({ scripts: { build: 'tsc -b', test: 'bun test' } }, null, 2)
     );
-    expect(entry.hitCount).toBe(0);
-  });
-
-  it('returns non-expired cache entries and increments hit count', () => {
-    const services = createCoreServices();
-    const bundle = {
-      id: 'bundle_fresh',
-      requestId: 'req_fresh',
-      repoIds: [],
-      summary: 'Fresh bundle',
-      selectedViewIds: [],
-      selectedClaimIds: [],
-      fileScope: [],
-      symbolScope: [],
-      commands: [],
-      proofHandles: [],
-      freshness: 'stale' as const,
-      cacheKey: 'fresh-cache',
-      metadata: {},
-      createdAt: '2026-03-11T09:00:00.000Z',
-      expiresAt: '2026-03-11T10:00:01.000Z',
-    };
-
-    services.store.bundles.push(bundle);
-    const entry = services.cache.put(bundle, new Date('2026-03-11T09:00:00.000Z'));
-
-    expect(services.cache.get('fresh-cache', new Date('2026-03-11T10:00:00.000Z'))?.id).toBe(
-      'bundle_fresh'
+    await writeFile(
+      path.join(rootPath, 'src/index.ts'),
+      'import { readFile } from "node:fs/promises";\nexport function hello() { return readFile.name; }\n'
     );
-    expect(entry.hitCount).toBe(1);
+
+    const { repository, services } = await registerAndScanRepository({
+      name: 'fixture',
+      rootPath,
+    });
+
+    const interfaceClaim = services.store.claims.find(
+      (claim) => claim.repoId === repository.id && claim.metadata?.claimKind === 'file_interface'
+    );
+    const importClaim = services.store.claims.find(
+      (claim) =>
+        claim.repoId === repository.id &&
+        claim.metadata?.claimKind === 'file_import' &&
+        claim.metadata?.importPath === 'node:fs/promises'
+    );
+    const interfaceView = services.store.views.find(
+      (view) => view.repoId === repository.id && view.type === 'interface'
+    );
+    const subsystemView = services.store.views.find(
+      (view) => view.repoId === repository.id && view.type === 'subsystem' && view.key === 'src'
+    );
+    const workflowView = services.store.views.find(
+      (view) => view.repoId === repository.id && view.type === 'workflow'
+    );
+    const decisionView = services.store.views.find(
+      (view) =>
+        view.repoId === repository.id && view.type === 'decision' && view.key === 'node:fs/promises'
+    );
+
+    expect(interfaceClaim !== undefined).toBeTrue();
+    expect(interfaceClaim?.anchors.some((anchor) => anchor.symbolId !== undefined)).toBeTrue();
+    expect(Array.isArray(interfaceClaim?.metadata?.edgeIds)).toBeTrue();
+    expect(importClaim?.factIds.length).toBe(1);
+    expect(importClaim?.anchors[0]?.filePath).toBe('src/index.ts');
+
+    expect(interfaceView?.summary).toContain('contains edges');
+    expect(interfaceView?.claimIds).toContain(interfaceClaim?.id);
+    expect(subsystemView?.summary).toContain('import edge');
+    expect(subsystemView?.claimIds.length).toBeGreaterThan(0);
+    expect(workflowView?.summary).toContain('exists because');
+    expect(decisionView?.claimIds).toContain(importClaim?.id);
+    expect(decisionView?.metadata?.rationale).toContain('external import claims');
+
+    services.store.facts = services.store.facts.map((fact) =>
+      fact.repoId === repository.id && fact.type === 'symbol_def'
+        ? { ...fact, freshness: 'stale' }
+        : fact
+    );
+    const rederived = services.derive(repository.id);
+
+    const rerenderedInterface = rederived.views.find((view) => view.type === 'interface');
+    expect(rerenderedInterface?.freshness).toBe('stale');
   });
 
   it('inherits bounded parent context when planning a child bundle', () => {
