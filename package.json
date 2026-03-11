@@ -21,6 +21,7 @@
     "verify:migrations": "bun scripts/verify-postgres.ts",
     "verify:openapi": "bun scripts/verify-openapi.ts",
     "verify:postgres": "bun scripts/verify-postgres.ts",
+    "smoke:postgres-service": "bun scripts/smoke-postgres-service.ts",
     "cli": "bun run --cwd apps/cli dev --"
   },
   "devDependencies": {

@@ -42,6 +42,32 @@ bun run verify:postgres
 That command creates a temporary database, applies `migrations/0001_init.sql`, verifies the expected tables and
 indexes, and drops the temporary database.
 
+## Operational PostgreSQL Launch
+
+Bring up a local PostgreSQL instance for SCBS:
+
+```bash
+docker compose -f compose.scbs-postgres.yaml up -d
+```
+
+Start SCBS against PostgreSQL:
+
+```bash
+export SCBS_STORAGE_ADAPTER=postgres
+export SCBS_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/scbs
+bun run cli -- migrate --json
+bun run cli -- serve --json
+```
+
+Run the checked-in smoke lane for that deployment path:
+
+```bash
+bun run smoke:postgres-service
+```
+
+That smoke lane runs `migrate`, checks `health`, starts the real HTTP `serve` process against PostgreSQL, waits for the
+JSON service report, and shuts it down cleanly.
+
 Run the CLI locally:
 
 ```bash
