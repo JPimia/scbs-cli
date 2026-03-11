@@ -155,8 +155,14 @@ CREATE TABLE recompute_jobs (
   target_id TEXT NOT NULL,
   changed_files JSONB NOT NULL,
   status TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  available_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
+  updated_at TIMESTAMPTZ NOT NULL,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  last_error TEXT
 );
 
 CREATE INDEX idx_file_records_repo_id ON file_records (repo_id);

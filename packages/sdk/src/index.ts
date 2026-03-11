@@ -1,8 +1,14 @@
 import { buildApiIndex, routeManifest } from '../../../apps/server/src/index';
 import type {
   ApiSurface,
+  DoctorReport,
+  FreshnessEventRecord,
   FreshnessImpact,
+  FreshnessJobKind,
+  FreshnessJobRecord,
   FreshnessState,
+  FreshnessWorkerReport,
+  JobListReport,
   ReceiptRecord,
   ReceiptSubmitInput,
   RegisterRepoInput,
@@ -58,9 +64,15 @@ export type {
 };
 export type {
   ApiSurface,
+  DoctorReport,
+  FreshnessEventRecord,
   RegisterRepoInput,
   FreshnessImpact,
+  FreshnessJobKind,
+  FreshnessJobRecord,
   FreshnessState,
+  FreshnessWorkerReport,
+  JobListReport,
   ReceiptRecord,
   ReceiptSubmitInput,
   RepoChangesInput,
@@ -137,7 +149,7 @@ export interface ScbsOperation {
   method: 'GET' | 'POST';
   path: string;
   summary: string;
-  tag: 'System' | 'Bundles' | 'Freshness' | 'Receipts';
+  tag: 'System' | 'Admin' | 'Bundles' | 'Freshness' | 'Receipts';
   successStatusCode: number;
 }
 
@@ -148,6 +160,11 @@ export interface ApiIndex {
   endpoints: {
     health: string;
     root: string;
+    adminDiagnostics: string;
+    listJobs: string;
+    showJob: string;
+    retryJob: string;
+    runWorker: string;
     listRepos: string;
     registerRepo: string;
     showRepo: string;
@@ -178,11 +195,22 @@ export interface ScbsClientOptions {
 }
 
 export interface ScbsClient {
+  admin: {
+    diagnostics(): Promise<DoctorReport>;
+    jobs(): Promise<JobListReport>;
+    showJob(id: string): Promise<FreshnessJobRecord>;
+    retryJob(id: string): Promise<FreshnessJobRecord>;
+    drainWorker(input?: {
+      limit?: number;
+      kinds?: FreshnessJobKind[];
+      jobIds?: string[];
+    }): Promise<FreshnessWorkerReport>;
+  };
   repos: {
     list(): Promise<ScbsRepoRecord[]>;
     show(id: string): Promise<ScbsRepoRecord>;
     register(input: RegisterRepoInput): Promise<ScbsRepoRecord>;
-    scan(id: string): Promise<ScbsRepoRecord>;
+    scan(id: string, input?: { queue?: boolean }): Promise<ScbsRepoRecord>;
     reportChanges(
       input: RepoChangesInput
     ): Promise<{ repoId: string; files: string[]; impacts: number }>;
@@ -252,11 +280,19 @@ export function createScbsClient(options: ScbsClientOptions): ScbsClient {
   const request = createRequester(options);
 
   return {
+    admin: {
+      diagnostics: () => request<DoctorReport>('GET', '/admin/diagnostics'),
+      jobs: () => request<JobListReport>('GET', '/admin/jobs'),
+      showJob: (id) => request<FreshnessJobRecord>('GET', '/admin/jobs/:id', { id }),
+      retryJob: (id) => request<FreshnessJobRecord>('POST', '/admin/jobs/:id/retry', { id }),
+      drainWorker: (input) =>
+        request<FreshnessWorkerReport>('POST', '/admin/worker/drain', undefined, input),
+    },
     repos: {
       list: () => request<ScbsRepoRecord[]>('GET', '/repos'),
       show: (id) => request<ScbsRepoRecord>('GET', '/repos/:id', { id }),
       register: (input) => request<ScbsRepoRecord>('POST', '/repos/register', undefined, input),
-      scan: (id) => request<ScbsRepoRecord>('POST', '/repos/:id/scan', { id }),
+      scan: (id, input) => request<ScbsRepoRecord>('POST', '/repos/:id/scan', { id }, input),
       reportChanges: (input) =>
         request<{ repoId: string; files: string[]; impacts: number }>(
           'POST',

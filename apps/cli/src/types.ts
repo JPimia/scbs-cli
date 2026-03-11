@@ -102,22 +102,41 @@ export interface FreshnessEventRecord {
   createdAt: string;
 }
 
+export type FreshnessJobKind = 'freshness_recompute' | 'repo_scan' | 'receipt_validation';
+
+export type FreshnessJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
 export interface FreshnessJobRecord {
   id: string;
-  kind: 'freshness_recompute' | 'repo_scan' | 'receipt_validation';
+  kind: FreshnessJobKind;
   repoId: string;
   eventId?: string;
   targetId: string;
   files: string[];
-  status: 'pending' | 'completed';
+  status: FreshnessJobStatus;
+  attempts: number;
+  maxAttempts: number;
+  availableAt: string;
   createdAt: string;
   updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  lastError?: string;
 }
 
 export interface FreshnessWorkerReport {
   processed: number;
   remaining: number;
   jobIds: string[];
+  failedJobIds: string[];
+}
+
+export interface WorkerLoopReport {
+  cycles: number;
+  processed: number;
+  idleCycles: number;
+  remaining: number;
+  failed: number;
 }
 
 export interface ReceiptRecord {
@@ -166,6 +185,20 @@ export interface DoctorReport {
     status: 'ok' | 'warn';
     detail: string;
   }>;
+}
+
+export interface JobSummary {
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+export interface JobListReport {
+  summary: JobSummary;
+  jobs: FreshnessJobRecord[];
+  recentEvents: FreshnessEventRecord[];
+  pendingReceiptIds: string[];
 }
 
 export interface JsonEnvelope<T> {

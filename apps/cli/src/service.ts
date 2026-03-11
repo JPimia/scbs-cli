@@ -6,14 +6,18 @@ import type {
   DoctorReport,
   FactRecord,
   FreshnessImpact,
+  FreshnessJobKind,
+  FreshnessJobRecord,
   FreshnessState,
   FreshnessWorkerReport,
   InitReport,
+  JobListReport,
   MigrationReport,
   ReceiptRecord,
   RepoRecord,
   ServeReport,
   ViewRecord,
+  WorkerLoopReport,
 } from './types';
 
 export interface RegisterRepoInput {
@@ -53,6 +57,9 @@ export interface ScbsService {
   serve(): Promise<ServeReport>;
   health(): Promise<{ status: 'ok'; service: string; version: string }>;
   doctor(): Promise<DoctorReport>;
+  listJobs(): Promise<JobListReport>;
+  showJob(id: string): Promise<FreshnessJobRecord>;
+  retryJob(id: string): Promise<FreshnessJobRecord>;
   migrate(): Promise<MigrationReport>;
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;
@@ -77,9 +84,15 @@ export interface ScbsService {
   recomputeFreshness(): Promise<{ updated: number }>;
   runFreshnessWorker(options?: {
     limit?: number;
-    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    kinds?: FreshnessJobKind[];
     jobIds?: string[];
   }): Promise<FreshnessWorkerReport>;
+  runWorkerLoop(options?: {
+    pollIntervalMs?: number;
+    maxIdleCycles?: number;
+    limit?: number;
+    kinds?: FreshnessJobKind[];
+  }): Promise<WorkerLoopReport>;
   getFreshnessStatus(): Promise<{ overall: FreshnessState; staleArtifacts: number }>;
   submitReceipt(input: ReceiptSubmitInput): Promise<ReceiptRecord>;
   listReceipts(): Promise<ReceiptRecord[]>;

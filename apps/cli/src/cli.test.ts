@@ -155,6 +155,73 @@ describe('CLI parsing', () => {
     });
   });
 
+  it('exposes admin job views and retryable worker failures', async () => {
+    const service = new InMemoryScbsService({
+      repos: [],
+      facts: [],
+      claims: [],
+      views: [],
+      bundles: [],
+      receipts: [],
+      bundleCache: [],
+      freshnessEvents: [],
+      freshnessJobs: [
+        {
+          id: 'job_missing_repo',
+          kind: 'repo_scan',
+          repoId: 'repo_missing',
+          targetId: 'repo_missing',
+          files: [],
+          status: 'pending',
+          attempts: 0,
+          maxAttempts: 2,
+          availableAt: '2026-03-11T00:00:00.000Z',
+          createdAt: '2026-03-11T00:00:00.000Z',
+          updatedAt: '2026-03-11T00:00:00.000Z',
+        },
+      ],
+    } as unknown as SeedState);
+
+    const jobs = await runCli(['admin', 'jobs', 'list', '--json'], service);
+    expect(jobs.exitCode).toBe(0);
+    expect(JSON.parse(jobs.stdout)).toMatchObject({
+      data: {
+        summary: {
+          pending: 1,
+        },
+      },
+    });
+
+    const failedRun = await runCli(['freshness', 'worker', '--json'], service);
+    expect(failedRun.exitCode).toBe(0);
+    expect(JSON.parse(failedRun.stdout)).toMatchObject({
+      data: {
+        failedJobIds: ['job_missing_repo'],
+      },
+    });
+
+    const jobAfterFailure = await runCli(
+      ['admin', 'jobs', 'show', 'job_missing_repo', '--json'],
+      service
+    );
+    expect(JSON.parse(jobAfterFailure.stdout)).toMatchObject({
+      data: {
+        id: 'job_missing_repo',
+        attempts: 1,
+        status: 'pending',
+      },
+    });
+
+    const retry = await runCli(['admin', 'jobs', 'retry', 'job_missing_repo', '--json'], service);
+    expect(retry.exitCode).toBe(0);
+    expect(JSON.parse(retry.stdout)).toMatchObject({
+      data: {
+        id: 'job_missing_repo',
+        status: 'pending',
+      },
+    });
+  });
+
   it('preserves richer graph-derived views when receipt validation rebuilds repo views', async () => {
     const repoId = 'repo_graph';
     const seedState = {

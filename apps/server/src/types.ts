@@ -77,6 +77,96 @@ export interface FreshnessImpact {
   state: FreshnessState;
 }
 
+export type FreshnessJobKind = 'freshness_recompute' | 'repo_scan' | 'receipt_validation';
+
+export type FreshnessJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface FreshnessEventRecord {
+  id: string;
+  repoId: string;
+  files: string[];
+  createdAt: string;
+}
+
+export interface FreshnessJobRecord {
+  id: string;
+  kind: FreshnessJobKind;
+  repoId: string;
+  eventId?: string;
+  targetId: string;
+  files: string[];
+  status: FreshnessJobStatus;
+  attempts: number;
+  maxAttempts: number;
+  availableAt: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  lastError?: string;
+}
+
+export interface FreshnessWorkerReport {
+  processed: number;
+  remaining: number;
+  jobIds: string[];
+  failedJobIds: string[];
+}
+
+export interface JobSummary {
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+export interface DoctorReport {
+  status: 'ok' | 'warn';
+  summary: string;
+  api: ApiSurface;
+  storage: StorageSurface;
+  diagnostics: {
+    artifacts: {
+      repos: number;
+      facts: number;
+      claims: number;
+      views: number;
+      bundles: number;
+      cachedBundles: number;
+      receipts: number;
+    };
+    freshness: {
+      overall: FreshnessState;
+      staleArtifacts: number;
+      pendingJobs: number;
+      completedJobs: number;
+      recentEvents: number;
+    };
+    receipts: {
+      pending: number;
+      validated: number;
+      rejected: number;
+    };
+    hotspots: {
+      staleBundleIds: string[];
+      pendingReceiptIds: string[];
+      pendingJobIds: string[];
+    };
+  };
+  checks: Array<{
+    name: string;
+    status: 'ok' | 'warn';
+    detail: string;
+  }>;
+}
+
+export interface JobListReport {
+  summary: JobSummary;
+  jobs: FreshnessJobRecord[];
+  recentEvents: FreshnessEventRecord[];
+  pendingReceiptIds: string[];
+}
+
 export interface ReceiptRecord {
   id: string;
   bundleId: string | null;
@@ -105,10 +195,14 @@ export interface RepoChangesInput {
 
 export interface ServerScbsService {
   health(): Promise<{ status: 'ok'; service: string; version: string }>;
+  doctor(): Promise<DoctorReport>;
+  listJobs(): Promise<JobListReport>;
+  showJob(id: string): Promise<FreshnessJobRecord>;
+  retryJob(id: string): Promise<FreshnessJobRecord>;
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;
   showRepo(id: string): Promise<RepoRecord>;
-  scanRepo(id: string): Promise<RepoRecord>;
+  scanRepo(id: string, options?: { queue?: boolean }): Promise<RepoRecord>;
   reportRepoChanges(
     input: RepoChangesInput
   ): Promise<{ repoId: string; files: string[]; impacts: number }>;
@@ -127,9 +221,14 @@ export interface ServerScbsService {
   getFreshnessImpacts(): Promise<FreshnessImpact[]>;
   getFreshnessStatus(): Promise<{ overall: FreshnessState; staleArtifacts: number }>;
   recomputeFreshness(): Promise<{ updated: number }>;
+  runFreshnessWorker(options?: {
+    limit?: number;
+    kinds?: FreshnessJobKind[];
+    jobIds?: string[];
+  }): Promise<FreshnessWorkerReport>;
   submitReceipt(input: ReceiptSubmitInput): Promise<ReceiptRecord>;
   listReceipts(): Promise<ReceiptRecord[]>;
   showReceipt(id: string): Promise<ReceiptRecord>;
-  validateReceipt(id: string): Promise<ReceiptRecord>;
+  validateReceipt(id: string, options?: { queue?: boolean }): Promise<ReceiptRecord>;
   rejectReceipt(id: string): Promise<ReceiptRecord>;
 }

@@ -59,14 +59,20 @@ bun run cli -- migrate --json
 bun run cli -- serve --json
 ```
 
+Run the persistent background worker against the same durable store:
+
+```bash
+bun run cli -- freshness worker --watch --json
+```
+
 Run the checked-in smoke lane for that deployment path:
 
 ```bash
 bun run smoke:postgres-service
 ```
 
-That smoke lane runs `migrate`, checks `health`, starts the real HTTP `serve` process against PostgreSQL, waits for the
-JSON service report, and shuts it down cleanly.
+That smoke lane runs `migrate`, registers a smoke repo, queues and drains a real background job, starts the HTTP
+`serve` process against PostgreSQL, verifies the admin diagnostics/job endpoints, and shuts the service down cleanly.
 
 Run the CLI locally:
 
@@ -80,6 +86,23 @@ bun run cli -- repo list --json
 The `scbs` binary exposes the service, repository, fact, claim, view, bundle, freshness, and receipt commands from the MVP spec. Every command accepts `--json`.
 
 The current CLI implementation stays intentionally thin. It now persists local artifact state through a durable JSON adapter under `.scbs/state.json`, while still keeping the command layer isolated behind the `apps/cli` service interface.
+
+Operator-oriented commands now include:
+
+```bash
+bun run cli -- admin diagnostics --json
+bun run cli -- admin jobs list --json
+bun run cli -- admin jobs show <job-id> --json
+bun run cli -- admin jobs retry <job-id> --json
+bun run cli -- freshness worker --watch --poll-interval-ms 1000 --json
+```
+
+The standalone HTTP surface exposes the same service-operations shape over:
+- `GET /api/v1/admin/diagnostics`
+- `GET /api/v1/admin/jobs`
+- `GET /api/v1/admin/jobs/:id`
+- `POST /api/v1/admin/jobs/:id/retry`
+- `POST /api/v1/admin/worker/drain`
 
 ## Verification coverage
 

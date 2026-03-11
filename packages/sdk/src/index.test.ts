@@ -87,6 +87,7 @@ describe('sdk package surface', () => {
     const index = createApiIndex(report);
 
     expect(index.api.baseUrl).toBe('http://127.0.0.1:4100');
+    expect(index.endpoints.adminDiagnostics).toBe('/api/v1/admin/diagnostics');
     expect(index.endpoints.listRepos).toBe('/api/v1/repos');
     expect(index.endpoints.planBundle).toBe('/api/v1/bundles/plan');
     expect(listServiceCapabilities(report.api)[0]?.name).toBe('bundle-plan');
@@ -99,6 +100,7 @@ describe('sdk package surface', () => {
     });
 
     expect(typeof client.repos.list).toBe('function');
+    expect(typeof client.admin.jobs).toBe('function');
     expect(typeof client.repos.register).toBe('function');
     expect(typeof client.facts.list).toBe('function');
     expect(typeof client.bundles.plan).toBe('function');
@@ -194,6 +196,118 @@ describe('sdk package surface', () => {
     expect(calls[4]?.url).toBe('http://127.0.0.1:4100/api/v1/repos/repo_2/changes');
     expect(calls[4]?.init?.body).toBe(JSON.stringify({ files: ['src/index.ts'] }));
     expect(calls[5]?.url).toBe('http://127.0.0.1:4100/api/v1/facts');
+  });
+
+  it('calls admin job endpoints with the expected methods and paths', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 'ok',
+        summary: 'healthy',
+        api: report.api,
+        storage: report.storage,
+        diagnostics: {
+          artifacts: {
+            repos: 1,
+            facts: 1,
+            claims: 1,
+            views: 1,
+            bundles: 1,
+            cachedBundles: 1,
+            receipts: 1,
+          },
+          freshness: {
+            overall: 'fresh',
+            staleArtifacts: 0,
+            pendingJobs: 1,
+            completedJobs: 0,
+            recentEvents: 1,
+          },
+          receipts: { pending: 1, validated: 0, rejected: 0 },
+          hotspots: {
+            staleBundleIds: [],
+            pendingReceiptIds: ['receipt_1'],
+            pendingJobIds: ['job_1'],
+          },
+        },
+        checks: [{ name: 'storage', status: 'ok', detail: 'ready' }],
+      },
+      {
+        summary: { pending: 1, running: 0, completed: 0, failed: 0 },
+        jobs: [
+          {
+            id: 'job_1',
+            kind: 'receipt_validation',
+            repoId: 'repo_1',
+            targetId: 'receipt_1',
+            files: [],
+            status: 'pending',
+            attempts: 0,
+            maxAttempts: 3,
+            availableAt: '2026-03-11T00:00:00.000Z',
+            createdAt: '2026-03-11T00:00:00.000Z',
+            updatedAt: '2026-03-11T00:00:00.000Z',
+          },
+        ],
+        recentEvents: [],
+        pendingReceiptIds: ['receipt_1'],
+      },
+      {
+        id: 'job_1',
+        kind: 'receipt_validation',
+        repoId: 'repo_1',
+        targetId: 'receipt_1',
+        files: [],
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 3,
+        availableAt: '2026-03-11T00:00:00.000Z',
+        createdAt: '2026-03-11T00:00:00.000Z',
+        updatedAt: '2026-03-11T00:00:00.000Z',
+      },
+      {
+        id: 'job_1',
+        kind: 'receipt_validation',
+        repoId: 'repo_1',
+        targetId: 'receipt_1',
+        files: [],
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 3,
+        availableAt: '2026-03-11T00:00:00.000Z',
+        createdAt: '2026-03-11T00:00:00.000Z',
+        updatedAt: '2026-03-11T00:00:00.000Z',
+      },
+      { processed: 1, remaining: 0, jobIds: ['job_1'], failedJobIds: [] },
+    ];
+
+    const client = createScbsClient({
+      baseUrl: 'http://127.0.0.1:4100',
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        const payload = responses.shift();
+        if (!payload) {
+          throw new Error('Unexpected fetch call.');
+        }
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    expect((await client.admin.diagnostics()).status).toBe('ok');
+    expect((await client.admin.jobs()).summary.pending).toBe(1);
+    expect((await client.admin.showJob('job_1')).id).toBe('job_1');
+    expect((await client.admin.retryJob('job_1')).id).toBe('job_1');
+    expect((await client.admin.drainWorker({ limit: 1 })).processed).toBe(1);
+
+    expect(calls[0]?.url).toBe('http://127.0.0.1:4100/api/v1/admin/diagnostics');
+    expect(calls[1]?.url).toBe('http://127.0.0.1:4100/api/v1/admin/jobs');
+    expect(calls[2]?.url).toBe('http://127.0.0.1:4100/api/v1/admin/jobs/job_1');
+    expect(calls[3]?.url).toBe('http://127.0.0.1:4100/api/v1/admin/jobs/job_1/retry');
+    expect(calls[4]?.url).toBe('http://127.0.0.1:4100/api/v1/admin/worker/drain');
+    expect(calls[4]?.init?.body).toBe(JSON.stringify({ limit: 1 }));
   });
 
   it('posts full bundle requests and parses full task bundles', async () => {

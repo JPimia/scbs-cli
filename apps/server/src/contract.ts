@@ -15,6 +15,8 @@ export interface ContractRequestBody {
   required: boolean;
   schema:
     | { type: 'registerRepoInput' }
+    | { type: 'queueControlInput' }
+    | { type: 'workerDrainInput' }
     | { type: 'repoChangesInput' }
     | { type: 'bundlePlanInput' }
     | { type: 'receiptSubmitInput' }
@@ -29,6 +31,7 @@ export interface ContractResponse {
   schema:
     | { type: 'health' }
     | { type: 'apiIndex' }
+    | { type: 'doctorReport' }
     | { type: 'repoRecord' }
     | { type: 'repoList' }
     | { type: 'factList' }
@@ -44,6 +47,9 @@ export interface ContractResponse {
     | { type: 'freshnessImpacts' }
     | { type: 'freshnessStatus' }
     | { type: 'recomputeFreshnessResult' }
+    | { type: 'workerRunReport' }
+    | { type: 'jobRecord' }
+    | { type: 'jobList' }
     | { type: 'receiptRecord' }
     | { type: 'receiptList' }
     | { type: 'missionControlBundleStatus' }
@@ -56,7 +62,7 @@ export interface RouteContract {
   path: string;
   operationId: string;
   summary: string;
-  tag: 'System' | 'Bundles' | 'Freshness' | 'Receipts';
+  tag: 'System' | 'Admin' | 'Bundles' | 'Freshness' | 'Receipts';
   requestBody?: ContractRequestBody;
   pathParams?: Array<{ name: string; description: string }>;
   success: ContractResponse;
@@ -97,6 +103,73 @@ export const routeManifest: RouteContract[] = [
       statusCode: 200,
       description: 'Top-level API index and endpoint directory.',
       schema: { type: 'apiIndex' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/diagnostics',
+    operationId: 'getAdminDiagnostics',
+    summary: 'Return operator diagnostics for the running SCBS service.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Operator diagnostics report.',
+      schema: { type: 'doctorReport' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/jobs',
+    operationId: 'listJobs',
+    summary: 'List background jobs, queue summary, and recent change events.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Background job report.',
+      schema: { type: 'jobList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/jobs/:id',
+    operationId: 'showJob',
+    summary: 'Fetch a background job by id.',
+    tag: 'Admin',
+    pathParams: [{ name: 'id', description: 'Background job identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Background job record.',
+      schema: { type: 'jobRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/jobs/:id/retry',
+    operationId: 'retryJob',
+    summary: 'Retry a failed or pending background job immediately.',
+    tag: 'Admin',
+    pathParams: [{ name: 'id', description: 'Background job identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Updated background job record.',
+      schema: { type: 'jobRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/worker/drain',
+    operationId: 'runWorker',
+    summary: 'Drain queued background jobs once with optional filters.',
+    tag: 'Admin',
+    requestBody: {
+      description: 'Optional worker drain controls.',
+      required: false,
+      schema: { type: 'workerDrainInput' },
+    },
+    success: {
+      statusCode: 200,
+      description: 'Background worker run report.',
+      schema: { type: 'workerRunReport' },
     },
   },
   {
@@ -148,6 +221,11 @@ export const routeManifest: RouteContract[] = [
     summary: 'Scan a registered repository.',
     tag: 'System',
     pathParams: [{ name: 'id', description: 'Repository identifier.' }],
+    requestBody: {
+      description: 'Optional repository scan controls.',
+      required: false,
+      schema: { type: 'queueControlInput' },
+    },
     success: {
       statusCode: 200,
       description: 'Scanned repository record.',
@@ -463,6 +541,11 @@ export const routeManifest: RouteContract[] = [
     summary: 'Validate a receipt.',
     tag: 'Receipts',
     pathParams: [{ name: 'id', description: 'Receipt identifier.' }],
+    requestBody: {
+      description: 'Optional receipt validation controls.',
+      required: false,
+      schema: { type: 'queueControlInput' },
+    },
     success: {
       statusCode: 200,
       description: 'Validated receipt record.',
@@ -492,6 +575,11 @@ export function buildApiIndex(report: { service: string; status: string; api: un
     endpoints: {
       health: '/health',
       root: '/api/v1',
+      adminDiagnostics: '/api/v1/admin/diagnostics',
+      listJobs: '/api/v1/admin/jobs',
+      showJob: '/api/v1/admin/jobs/:id',
+      retryJob: '/api/v1/admin/jobs/:id/retry',
+      runWorker: '/api/v1/admin/worker/drain',
       listRepos: '/api/v1/repos',
       registerRepo: '/api/v1/repos/register',
       showRepo: '/api/v1/repos/:id',
@@ -528,6 +616,26 @@ export function normalizeRegisterRepoInput(body: Record<string, unknown>): Regis
   return {
     name: getRequiredString(body, 'name'),
     path: getRequiredString(body, 'path'),
+  };
+}
+
+export function normalizeQueueControlInput(body: Record<string, unknown>): { queue?: boolean } {
+  return {
+    queue: getOptionalBoolean(body, 'queue') ?? undefined,
+  };
+}
+
+export function normalizeWorkerDrainInput(body: Record<string, unknown>): {
+  limit?: number;
+  kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+  jobIds?: string[];
+} {
+  return {
+    limit: getOptionalNumber(body, 'limit') ?? undefined,
+    kinds: getOptionalStringArray(body, 'kinds') as
+      | Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>
+      | undefined,
+    jobIds: getOptionalStringArray(body, 'jobIds'),
   };
 }
 
@@ -635,6 +743,30 @@ function getOptionalString(body: Record<string, unknown>, key: string): string |
 
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`Field "${key}" must be a non-empty string when provided.`);
+  }
+
+  return value;
+}
+
+function getOptionalBoolean(body: Record<string, unknown>, key: string): boolean | null {
+  const value = body[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`Field "${key}" must be a boolean when provided.`);
+  }
+
+  return value;
+}
+
+function getOptionalNumber(body: Record<string, unknown>, key: string): number | null {
+  const value = body[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Field "${key}" must be a finite number when provided.`);
   }
 
   return value;
