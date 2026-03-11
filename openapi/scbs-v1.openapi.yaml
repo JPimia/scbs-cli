@@ -83,6 +83,185 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/JobListReport"
+  /api/v1/admin/bundles:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listAdminBundles"
+      summary: "List bundles with review-oriented visibility fields."
+      responses:
+        200:
+          description: "Bundle visibility records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleListEntryList"
+  /api/v1/admin/bundles/{id}/review:
+    get:
+      tags:
+        - "Admin"
+      operationId: "reviewBundle"
+      summary: "Fetch planner diagnostics and receipt history for a bundle."
+      responses:
+        200:
+          description: "Bundle review record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleReviewRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Bundle identifier."
+          schema:
+            type: "string"
+  /api/v1/admin/receipts/history:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listReceiptHistory"
+      summary: "List review history for all receipts."
+      responses:
+        200:
+          description: "Receipt review history records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptReviewRecordList"
+  /api/v1/admin/receipts/{id}/history:
+    get:
+      tags:
+        - "Admin"
+      operationId: "showReceiptHistory"
+      summary: "List review history for a receipt."
+      responses:
+        200:
+          description: "Receipt review history records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptReviewRecordList"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Receipt identifier."
+          schema:
+            type: "string"
+  /api/v1/admin/outbox:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listOutboxEvents"
+      summary: "List lifecycle outbox events and delivery state."
+      responses:
+        200:
+          description: "Outbox events."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboxEventRecordList"
+  /api/v1/admin/outbox/{id}:
+    get:
+      tags:
+        - "Admin"
+      operationId: "showOutboxEvent"
+      summary: "Fetch a lifecycle outbox event by id."
+      responses:
+        200:
+          description: "Outbox event."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboxEventRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Outbox event identifier."
+          schema:
+            type: "string"
+  /api/v1/admin/webhooks:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listWebhooks"
+      summary: "List webhook subscriptions."
+      responses:
+        200:
+          description: "Webhook subscriptions."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRecordList"
+    post:
+      tags:
+        - "Admin"
+      operationId: "createWebhook"
+      summary: "Create a webhook subscription."
+      responses:
+        201:
+          description: "Created webhook subscription."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRecord"
+      requestBody:
+        required: true
+        description: "Webhook subscription payload."
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookCreateInput"
+  /api/v1/admin/access-tokens:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listAccessTokens"
+      summary: "List configured access tokens without secret material."
+      responses:
+        200:
+          description: "Access tokens."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenRecordList"
+    post:
+      tags:
+        - "Admin"
+      operationId: "createAccessToken"
+      summary: "Create a scoped access token."
+      responses:
+        201:
+          description: "Created access token grant."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenGrant"
+      requestBody:
+        required: true
+        description: "Access token creation payload."
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccessTokenCreateInput"
+  /api/v1/admin/audit:
+    get:
+      tags:
+        - "Admin"
+      operationId: "listAuditRecords"
+      summary: "List audit records for admin and repository actions."
+      responses:
+        200:
+          description: "Audit records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditRecordList"
   /api/v1/admin/jobs/{id}:
     get:
       tags:
@@ -747,6 +926,7 @@ components:
               - "freshness_recompute"
               - "repo_scan"
               - "receipt_validation"
+              - "webhook_delivery"
         jobIds:
           type: "array"
           items:
@@ -777,6 +957,17 @@ components:
             - "root"
             - "adminDiagnostics"
             - "listJobs"
+            - "listAdminBundles"
+            - "reviewBundle"
+            - "listReceiptHistory"
+            - "showReceiptHistory"
+            - "listOutboxEvents"
+            - "showOutboxEvent"
+            - "listWebhooks"
+            - "createWebhook"
+            - "listAccessTokens"
+            - "createAccessToken"
+            - "listAuditRecords"
             - "showJob"
             - "retryJob"
             - "runWorker"
@@ -816,6 +1007,28 @@ components:
             adminDiagnostics:
               type: "string"
             listJobs:
+              type: "string"
+            listAdminBundles:
+              type: "string"
+            reviewBundle:
+              type: "string"
+            listReceiptHistory:
+              type: "string"
+            showReceiptHistory:
+              type: "string"
+            listOutboxEvents:
+              type: "string"
+            showOutboxEvent:
+              type: "string"
+            listWebhooks:
+              type: "string"
+            createWebhook:
+              type: "string"
+            listAccessTokens:
+              type: "string"
+            createAccessToken:
+              type: "string"
+            listAuditRecords:
               type: "string"
             showJob:
               type: "string"
@@ -1496,6 +1709,7 @@ components:
             - "freshness_recompute"
             - "repo_scan"
             - "receipt_validation"
+            - "webhook_delivery"
         repoId:
           type: "string"
         eventId:
@@ -1569,6 +1783,315 @@ components:
           type: "array"
           items:
             type: "string"
+    BundleListEntry:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "taskTitle"
+        - "repoIds"
+        - "freshness"
+        - "receiptCount"
+        - "pendingReceiptCount"
+        - "hasPlannerDiagnostics"
+        - "createdAt"
+      properties:
+        id:
+          type: "string"
+        taskTitle:
+          type: "string"
+        repoIds:
+          type: "array"
+          items:
+            type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+        receiptCount:
+          type: "number"
+        pendingReceiptCount:
+          type: "number"
+        hasPlannerDiagnostics:
+          type: "boolean"
+        createdAt:
+          type: "string"
+    BundleListEntryList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/BundleListEntry"
+    ReceiptReviewRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "receiptId"
+        - "bundleId"
+        - "action"
+        - "actor"
+        - "note"
+        - "createdAt"
+      properties:
+        id:
+          type: "string"
+        receiptId:
+          type: "string"
+        bundleId:
+          type:
+            - "string"
+            - "null"
+        action:
+          type: "string"
+          enum:
+            - "submitted"
+            - "queued_for_validation"
+            - "validated"
+            - "rejected"
+            - "validation_failed"
+        actor:
+          type: "string"
+        note:
+          type: "string"
+        createdAt:
+          type: "string"
+    ReceiptReviewRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/ReceiptReviewRecord"
+    BundleReviewRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "bundle"
+        - "receipts"
+        - "receiptHistory"
+      properties:
+        bundle:
+          $ref: "#/components/schemas/BundleRecord"
+        receipts:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/ReceiptRecord"
+        receiptHistory:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/ReceiptReviewRecord"
+        plannerDiagnostics:
+          type: "object"
+    WebhookCreateInput:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "label"
+        - "url"
+        - "events"
+      properties:
+        label:
+          type: "string"
+        url:
+          type: "string"
+        events:
+          type: "array"
+          items:
+            type: "string"
+    WebhookRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "label"
+        - "url"
+        - "events"
+        - "active"
+        - "createdAt"
+        - "updatedAt"
+      properties:
+        id:
+          type: "string"
+        label:
+          type: "string"
+        url:
+          type: "string"
+        events:
+          type: "array"
+          items:
+            type: "string"
+        active:
+          type: "boolean"
+        createdAt:
+          type: "string"
+        updatedAt:
+          type: "string"
+        lastDeliveryAt:
+          type: "string"
+    WebhookRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/WebhookRecord"
+    OutboxDeliveryRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "webhookId"
+        - "status"
+        - "attempts"
+      properties:
+        webhookId:
+          type: "string"
+        status:
+          type: "string"
+          enum:
+            - "pending"
+            - "delivered"
+            - "failed"
+        attempts:
+          type: "number"
+        lastAttemptAt:
+          type: "string"
+        deliveredAt:
+          type: "string"
+        lastError:
+          type: "string"
+    OutboxEventRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "topic"
+        - "aggregateType"
+        - "aggregateId"
+        - "status"
+        - "payload"
+        - "deliveries"
+        - "createdAt"
+        - "updatedAt"
+      properties:
+        id:
+          type: "string"
+        topic:
+          type: "string"
+        aggregateType:
+          type: "string"
+          enum:
+            - "repo"
+            - "bundle"
+            - "receipt"
+        aggregateId:
+          type: "string"
+        repoId:
+          type: "string"
+        status:
+          type: "string"
+          enum:
+            - "pending"
+            - "delivered"
+            - "failed"
+            - "partial"
+        payload:
+          type: "object"
+        deliveries:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/OutboxDeliveryRecord"
+        createdAt:
+          type: "string"
+        updatedAt:
+          type: "string"
+    OutboxEventRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/OutboxEventRecord"
+    AccessTokenCreateInput:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "label"
+        - "scopes"
+      properties:
+        label:
+          type: "string"
+        scopes:
+          type: "array"
+          items:
+            type: "string"
+    AccessTokenRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "label"
+        - "scopes"
+        - "createdAt"
+      properties:
+        id:
+          type: "string"
+        label:
+          type: "string"
+        scopes:
+          type: "array"
+          items:
+            type: "string"
+        createdAt:
+          type: "string"
+        lastUsedAt:
+          type: "string"
+    AccessTokenRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/AccessTokenRecord"
+    AccessTokenGrant:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "token"
+        - "record"
+      properties:
+        token:
+          type: "string"
+        record:
+          $ref: "#/components/schemas/AccessTokenRecord"
+    AuditRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "actor"
+        - "action"
+        - "scope"
+        - "resourceType"
+        - "outcome"
+        - "createdAt"
+      properties:
+        id:
+          type: "string"
+        actor:
+          type: "string"
+        action:
+          type: "string"
+        scope:
+          type: "string"
+          enum:
+            - "admin"
+            - "repo"
+            - "bundle"
+            - "receipt"
+            - "system"
+        resourceType:
+          type: "string"
+        resourceId:
+          type: "string"
+        outcome:
+          type: "string"
+          enum:
+            - "success"
+            - "denied"
+            - "error"
+        metadata:
+          type: "object"
+        createdAt:
+          type: "string"
+    AuditRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/AuditRecord"
     WorkerRunReport:
       type: "object"
       additionalProperties: false

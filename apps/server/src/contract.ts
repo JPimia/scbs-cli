@@ -2,10 +2,12 @@ import type { MissionControlTaskEnvelope } from '../../../packages/adapter-missi
 import type { SisuBundlePlanJob, SisuReceiptNote } from '../../../packages/adapter-sisu/src/index';
 import { parseBundleRequest } from '../../../packages/protocol/src/index';
 import type {
+  AccessTokenCreateInput,
   BundlePlanInput,
   ReceiptSubmitInput,
   RegisterRepoInput,
   RepoChangesInput,
+  WebhookCreateInput,
 } from './types';
 
 export type HttpMethod = 'GET' | 'POST';
@@ -17,6 +19,8 @@ export interface ContractRequestBody {
     | { type: 'registerRepoInput' }
     | { type: 'queueControlInput' }
     | { type: 'workerDrainInput' }
+    | { type: 'webhookCreateInput' }
+    | { type: 'accessTokenCreateInput' }
     | { type: 'repoChangesInput' }
     | { type: 'bundlePlanInput' }
     | { type: 'receiptSubmitInput' }
@@ -32,6 +36,8 @@ export interface ContractResponse {
     | { type: 'health' }
     | { type: 'apiIndex' }
     | { type: 'doctorReport' }
+    | { type: 'bundleList' }
+    | { type: 'bundleReview' }
     | { type: 'repoRecord' }
     | { type: 'repoList' }
     | { type: 'factList' }
@@ -50,8 +56,16 @@ export interface ContractResponse {
     | { type: 'workerRunReport' }
     | { type: 'jobRecord' }
     | { type: 'jobList' }
+    | { type: 'receiptReviewList' }
     | { type: 'receiptRecord' }
     | { type: 'receiptList' }
+    | { type: 'outboxEvent' }
+    | { type: 'outboxEventList' }
+    | { type: 'webhookRecord' }
+    | { type: 'webhookRecordList' }
+    | { type: 'accessTokenRecordList' }
+    | { type: 'accessTokenGrant' }
+    | { type: 'auditRecordList' }
     | { type: 'missionControlBundleStatus' }
     | { type: 'sisuBundleSnapshot' }
     | { type: 'sisuReceiptSnapshot' };
@@ -127,6 +141,151 @@ export const routeManifest: RouteContract[] = [
       statusCode: 200,
       description: 'Background job report.',
       schema: { type: 'jobList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/bundles',
+    operationId: 'listAdminBundles',
+    summary: 'List bundles with review-oriented visibility fields.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Bundle visibility records.',
+      schema: { type: 'bundleList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/bundles/:id/review',
+    operationId: 'reviewBundle',
+    summary: 'Fetch planner diagnostics and receipt history for a bundle.',
+    tag: 'Admin',
+    pathParams: [{ name: 'id', description: 'Bundle identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Bundle review record.',
+      schema: { type: 'bundleReview' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/receipts/history',
+    operationId: 'listReceiptHistory',
+    summary: 'List review history for all receipts.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Receipt review history records.',
+      schema: { type: 'receiptReviewList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/receipts/:id/history',
+    operationId: 'showReceiptHistory',
+    summary: 'List review history for a receipt.',
+    tag: 'Admin',
+    pathParams: [{ name: 'id', description: 'Receipt identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Receipt review history records.',
+      schema: { type: 'receiptReviewList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/outbox',
+    operationId: 'listOutboxEvents',
+    summary: 'List lifecycle outbox events and delivery state.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Outbox events.',
+      schema: { type: 'outboxEventList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/outbox/:id',
+    operationId: 'showOutboxEvent',
+    summary: 'Fetch a lifecycle outbox event by id.',
+    tag: 'Admin',
+    pathParams: [{ name: 'id', description: 'Outbox event identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Outbox event.',
+      schema: { type: 'outboxEvent' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/webhooks',
+    operationId: 'listWebhooks',
+    summary: 'List webhook subscriptions.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Webhook subscriptions.',
+      schema: { type: 'webhookRecordList' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/webhooks',
+    operationId: 'createWebhook',
+    summary: 'Create a webhook subscription.',
+    tag: 'Admin',
+    requestBody: {
+      description: 'Webhook subscription payload.',
+      required: true,
+      schema: { type: 'webhookCreateInput' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Created webhook subscription.',
+      schema: { type: 'webhookRecord' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/access-tokens',
+    operationId: 'listAccessTokens',
+    summary: 'List configured access tokens without secret material.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Access tokens.',
+      schema: { type: 'accessTokenRecordList' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/admin/access-tokens',
+    operationId: 'createAccessToken',
+    summary: 'Create a scoped access token.',
+    tag: 'Admin',
+    requestBody: {
+      description: 'Access token creation payload.',
+      required: true,
+      schema: { type: 'accessTokenCreateInput' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Created access token grant.',
+      schema: { type: 'accessTokenGrant' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/admin/audit',
+    operationId: 'listAuditRecords',
+    summary: 'List audit records for admin and repository actions.',
+    tag: 'Admin',
+    success: {
+      statusCode: 200,
+      description: 'Audit records.',
+      schema: { type: 'auditRecordList' },
     },
   },
   {
@@ -577,6 +736,17 @@ export function buildApiIndex(report: { service: string; status: string; api: un
       root: '/api/v1',
       adminDiagnostics: '/api/v1/admin/diagnostics',
       listJobs: '/api/v1/admin/jobs',
+      listAdminBundles: '/api/v1/admin/bundles',
+      reviewBundle: '/api/v1/admin/bundles/:id/review',
+      listReceiptHistory: '/api/v1/admin/receipts/history',
+      showReceiptHistory: '/api/v1/admin/receipts/:id/history',
+      listOutboxEvents: '/api/v1/admin/outbox',
+      showOutboxEvent: '/api/v1/admin/outbox/:id',
+      listWebhooks: '/api/v1/admin/webhooks',
+      createWebhook: '/api/v1/admin/webhooks',
+      listAccessTokens: '/api/v1/admin/access-tokens',
+      createAccessToken: '/api/v1/admin/access-tokens',
+      listAuditRecords: '/api/v1/admin/audit',
       showJob: '/api/v1/admin/jobs/:id',
       retryJob: '/api/v1/admin/jobs/:id/retry',
       runWorker: '/api/v1/admin/worker/drain',
@@ -627,15 +797,32 @@ export function normalizeQueueControlInput(body: Record<string, unknown>): { que
 
 export function normalizeWorkerDrainInput(body: Record<string, unknown>): {
   limit?: number;
-  kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+  kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation' | 'webhook_delivery'>;
   jobIds?: string[];
 } {
   return {
     limit: getOptionalNumber(body, 'limit') ?? undefined,
     kinds: getOptionalStringArray(body, 'kinds') as
-      | Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>
+      | Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation' | 'webhook_delivery'>
       | undefined,
     jobIds: getOptionalStringArray(body, 'jobIds'),
+  };
+}
+
+export function normalizeWebhookCreateInput(body: Record<string, unknown>): WebhookCreateInput {
+  return {
+    label: getRequiredString(body, 'label'),
+    url: getRequiredString(body, 'url'),
+    events: getRequiredStringArray(body, 'events') as WebhookCreateInput['events'],
+  };
+}
+
+export function normalizeAccessTokenCreateInput(
+  body: Record<string, unknown>
+): AccessTokenCreateInput {
+  return {
+    label: getRequiredString(body, 'label'),
+    scopes: getRequiredStringArray(body, 'scopes') as AccessTokenCreateInput['scopes'],
   };
 }
 

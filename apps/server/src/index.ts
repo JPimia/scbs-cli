@@ -3,9 +3,16 @@ export { handleApiRequest } from './http';
 export { buildOpenApiDocument, buildOpenApiJson, buildOpenApiYaml } from './openapi';
 export { createScbsHttpHandler, createScbsHttpServer } from './server';
 export type {
+  AccessScope,
+  AccessTokenCreateInput,
+  AccessTokenGrant,
+  AccessTokenRecord,
   ApiSurface,
+  AuditRecord,
+  BundleListEntry,
   BundlePlanInput,
   BundleRecord,
+  BundleReviewRecord,
   DoctorReport,
   FactRecord,
   FreshnessEventRecord,
@@ -15,7 +22,9 @@ export type {
   FreshnessState,
   FreshnessWorkerReport,
   JobListReport,
+  OutboxEventRecord,
   RegisterRepoInput,
+  ReceiptReviewRecord,
   ReceiptRecord,
   ReceiptSubmitInput,
   RepoChangesInput,
@@ -24,4 +33,6 @@ export type {
   ServeReport,
   ServiceCapability,
   StorageSurface,
+  WebhookCreateInput,
+  WebhookRecord,
 } from './types';

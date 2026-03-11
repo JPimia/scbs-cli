@@ -301,6 +301,57 @@ export class DurableScbsService implements ScbsService {
     return this.withMutation((service) => service.retryJob(id));
   }
 
+  public async listBundles() {
+    return this.withService((service) => service.listBundles());
+  }
+
+  public async reviewBundle(id: string) {
+    return this.withService((service) => service.reviewBundle(id));
+  }
+
+  public async listReceiptHistory(id?: string) {
+    return this.withService((service) => service.listReceiptHistory(id));
+  }
+
+  public async listOutboxEvents() {
+    return this.withService((service) => service.listOutboxEvents());
+  }
+
+  public async showOutboxEvent(id: string) {
+    return this.withService((service) => service.showOutboxEvent(id));
+  }
+
+  public async listWebhooks() {
+    return this.withService((service) => service.listWebhooks());
+  }
+
+  public async createWebhook(input: Parameters<InMemoryScbsService['createWebhook']>[0]) {
+    return this.withMutation((service) => service.createWebhook(input));
+  }
+
+  public async listAccessTokens() {
+    return this.withService((service) => service.listAccessTokens());
+  }
+
+  public async createAccessToken(input: Parameters<InMemoryScbsService['createAccessToken']>[0]) {
+    return this.withMutation((service) => service.createAccessToken(input));
+  }
+
+  public async authorizeAccessToken(
+    token: string,
+    scopes: Parameters<InMemoryScbsService['authorizeAccessToken']>[1]
+  ) {
+    return this.withMutation((service) => service.authorizeAccessToken(token, scopes));
+  }
+
+  public async listAuditRecords() {
+    return this.withService((service) => service.listAuditRecords());
+  }
+
+  public async recordAudit(input: Parameters<InMemoryScbsService['recordAudit']>[0]) {
+    return this.withMutation((service) => service.recordAudit(input));
+  }
+
   public async migrate(): Promise<MigrationReport> {
     const migration = await this.store.migrate();
     return {

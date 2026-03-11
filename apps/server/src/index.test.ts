@@ -8,16 +8,24 @@ import { routeManifest } from './contract';
 import { buildOpenApiDocument, buildOpenApiJson, buildOpenApiYaml } from './openapi';
 import { createScbsHttpServer } from './server';
 import type {
+  AccessTokenGrant,
+  AccessTokenRecord,
+  AuditRecord,
+  BundleListEntry,
   BundlePlanInput,
+  BundleReviewRecord,
   ClaimRecord,
   DoctorReport,
   FactRecord,
   FreshnessJobRecord,
+  OutboxEventRecord,
+  ReceiptReviewRecord,
   ReceiptSubmitInput,
   RepoRecord,
   ServeReport,
   ServerScbsService,
   ViewRecord,
+  WebhookRecord,
 } from './types';
 
 const claimFixtures: ClaimRecord[] = [
@@ -98,6 +106,120 @@ class StubService implements ServerScbsService {
         files: string[];
       }
     | undefined;
+
+  public async listBundles(): Promise<BundleListEntry[]> {
+    return [
+      {
+        id: 'bundle_bootstrap',
+        taskTitle: 'bootstrap context',
+        repoIds: ['repo_local-default'],
+        freshness: 'fresh',
+        receiptCount: 1,
+        pendingReceiptCount: 0,
+        hasPlannerDiagnostics: true,
+        createdAt: '2026-03-11T00:00:00.000Z',
+      },
+    ];
+  }
+
+  public async reviewBundle(id: string): Promise<BundleReviewRecord> {
+    return {
+      bundle: await this.showBundle(id),
+      receipts: await this.listReceipts(),
+      receiptHistory: await this.listReceiptHistory(),
+      plannerDiagnostics: { selectedViewIds: ['view_system-overview'] },
+    };
+  }
+
+  public async listReceiptHistory(id?: string): Promise<ReceiptReviewRecord[]> {
+    const history: ReceiptReviewRecord[] = [
+      {
+        id: 'receipt-review_1',
+        receiptId: 'receipt_1',
+        bundleId: 'bundle_bootstrap',
+        action: 'validated',
+        actor: 'system',
+        note: 'Validated.',
+        createdAt: '2026-03-11T00:00:00.000Z',
+      },
+    ];
+    return id ? history.filter((entry) => entry.receiptId === id) : history;
+  }
+
+  public async listOutboxEvents(): Promise<OutboxEventRecord[]> {
+    return [await this.showOutboxEvent('outbox_1')];
+  }
+
+  public async showOutboxEvent(id: string): Promise<OutboxEventRecord> {
+    return {
+      id,
+      topic: 'bundle.planned',
+      aggregateType: 'bundle',
+      aggregateId: 'bundle_bootstrap',
+      status: 'delivered',
+      payload: { taskTitle: 'bootstrap context' },
+      deliveries: [],
+      createdAt: '2026-03-11T00:00:00.000Z',
+      updatedAt: '2026-03-11T00:00:00.000Z',
+    };
+  }
+
+  public async listWebhooks(): Promise<WebhookRecord[]> {
+    return [];
+  }
+
+  public async createWebhook(): Promise<WebhookRecord> {
+    return {
+      id: 'webhook_1',
+      label: 'ops',
+      url: 'http://127.0.0.1:9999/hook',
+      events: ['bundle.planned'],
+      active: true,
+      createdAt: '2026-03-11T00:00:00.000Z',
+      updatedAt: '2026-03-11T00:00:00.000Z',
+    };
+  }
+
+  public async listAccessTokens(): Promise<AccessTokenRecord[]> {
+    return [];
+  }
+
+  public async createAccessToken(): Promise<AccessTokenGrant> {
+    return {
+      token: 'scbs_test',
+      record: {
+        id: 'token_1',
+        label: 'test',
+        scopes: ['admin:write', 'admin:read', 'repo:write', 'repo:read'],
+        createdAt: '2026-03-11T00:00:00.000Z',
+      },
+    };
+  }
+
+  public async authorizeAccessToken(): Promise<AccessTokenRecord | null> {
+    return {
+      id: 'token_1',
+      label: 'test',
+      scopes: ['admin:write', 'admin:read', 'repo:write', 'repo:read'],
+      createdAt: '2026-03-11T00:00:00.000Z',
+    };
+  }
+
+  public async listAuditRecords(): Promise<AuditRecord[]> {
+    return [];
+  }
+
+  public async recordAudit(): Promise<AuditRecord> {
+    return {
+      id: 'audit_1',
+      actor: 'test',
+      action: 'noop',
+      scope: 'admin',
+      resourceType: 'route',
+      outcome: 'success',
+      createdAt: '2026-03-11T00:00:00.000Z',
+    };
+  }
 
   public async health() {
     return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
@@ -432,7 +554,7 @@ describe('server contract', () => {
     const document = buildOpenApiDocument();
     const operations = Object.values(document.paths).flatMap((pathItem) => Object.keys(pathItem));
 
-    expect(routeManifest).toHaveLength(36);
+    expect(routeManifest).toHaveLength(47);
     expect(operations).toHaveLength(routeManifest.length);
     expect(document.paths['/api/v1/claims']?.get).toMatchObject({
       operationId: 'listClaims',
@@ -448,6 +570,12 @@ describe('server contract', () => {
     });
     expect(document.paths['/api/v1/repos']?.get).toMatchObject({
       operationId: 'listRepos',
+    });
+    expect(document.paths['/api/v1/admin/bundles']?.get).toMatchObject({
+      operationId: 'listAdminBundles',
+    });
+    expect(document.paths['/api/v1/admin/outbox/{id}']?.get).toMatchObject({
+      operationId: 'showOutboxEvent',
     });
     expect(document.paths['/api/v1/facts']?.get).toMatchObject({
       operationId: 'listFacts',
@@ -492,6 +620,10 @@ describe('server contract', () => {
       endpoints: {
         adminDiagnostics: '/api/v1/admin/diagnostics',
         listJobs: '/api/v1/admin/jobs',
+        listAdminBundles: '/api/v1/admin/bundles',
+        reviewBundle: '/api/v1/admin/bundles/:id/review',
+        listOutboxEvents: '/api/v1/admin/outbox',
+        listAccessTokens: '/api/v1/admin/access-tokens',
         runWorker: '/api/v1/admin/worker/drain',
         listRepos: '/api/v1/repos',
         registerRepo: '/api/v1/repos/register',
@@ -583,6 +715,28 @@ describe('server contract', () => {
         },
       ],
     });
+
+    const bundleReviewResponse = await fetch(
+      `${baseUrl}/api/v1/admin/bundles/bundle_bootstrap/review`
+    );
+    expect(bundleReviewResponse.status).toBe(200);
+    await expect(bundleReviewResponse.json()).resolves.toMatchObject({
+      bundle: {
+        id: 'bundle_bootstrap',
+      },
+      plannerDiagnostics: {
+        selectedViewIds: ['view_system-overview'],
+      },
+    });
+
+    const outboxResponse = await fetch(`${baseUrl}/api/v1/admin/outbox`);
+    expect(outboxResponse.status).toBe(200);
+    await expect(outboxResponse.json()).resolves.toMatchObject([
+      {
+        id: 'outbox_1',
+        topic: 'bundle.planned',
+      },
+    ]);
 
     const drainResponse = await fetch(`${baseUrl}/api/v1/admin/worker/drain`, {
       method: 'POST',

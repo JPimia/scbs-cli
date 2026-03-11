@@ -12,6 +12,7 @@ import {
 } from '../../../packages/adapter-sisu/src/index';
 import {
   buildApiIndex,
+  normalizeAccessTokenCreateInput,
   normalizeBundlePlanInput,
   normalizeMissionControlTaskEnvelope,
   normalizeQueueControlInput,
@@ -20,11 +21,12 @@ import {
   normalizeRepoChangesInput,
   normalizeSisuBundlePlanJob,
   normalizeSisuReceiptNote,
+  normalizeWebhookCreateInput,
   normalizeWorkerDrainInput,
   routeManifest,
 } from './contract';
 import type { RouteContract } from './contract';
-import type { ServeReport, ServerScbsService } from './types';
+import type { AccessScope, ServeReport, ServerScbsService } from './types';
 
 type RouteMatch =
   | {
@@ -44,12 +46,72 @@ type HandlerResult = { statusCode?: number; body: unknown };
 
 type RouteHandler = (context: RequestContext) => Promise<HandlerResult>;
 
+function requiredScopesForRoute(route: RouteContract): AccessScope[] {
+  if (route.path.startsWith('/api/v1/admin/')) {
+    return route.method === 'GET' ? ['admin:read'] : ['admin:write'];
+  }
+  if (route.path.startsWith('/api/v1/repos')) {
+    return route.method === 'GET' ? ['repo:read'] : ['repo:write'];
+  }
+  return [];
+}
+
 const routeHandlers = new Map<string, RouteHandler>([
   ['GET /health', async ({ service }) => ({ body: await service.health() })],
   ['GET /api/v1', async ({ report }) => ({ body: buildApiIndex(report) })],
   ['GET /api/v1/', async ({ report }) => ({ body: buildApiIndex(report) })],
   ['GET /api/v1/admin/diagnostics', async ({ service }) => ({ body: await service.doctor() })],
   ['GET /api/v1/admin/jobs', async ({ service }) => ({ body: await service.listJobs() })],
+  ['GET /api/v1/admin/bundles', async ({ service }) => ({ body: await service.listBundles() })],
+  [
+    'GET /api/v1/admin/bundles/:id/review',
+    async ({ params, service }) => ({
+      body: await service.reviewBundle(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'GET /api/v1/admin/receipts/history',
+    async ({ service }) => ({ body: await service.listReceiptHistory() }),
+  ],
+  [
+    'GET /api/v1/admin/receipts/:id/history',
+    async ({ params, service }) => ({
+      body: await service.listReceiptHistory(getRequiredParam(params, 'id')),
+    }),
+  ],
+  ['GET /api/v1/admin/outbox', async ({ service }) => ({ body: await service.listOutboxEvents() })],
+  [
+    'GET /api/v1/admin/outbox/:id',
+    async ({ params, service }) => ({
+      body: await service.showOutboxEvent(getRequiredParam(params, 'id')),
+    }),
+  ],
+  ['GET /api/v1/admin/webhooks', async ({ service }) => ({ body: await service.listWebhooks() })],
+  [
+    'POST /api/v1/admin/webhooks',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await service.createWebhook(
+        await withBadRequest(async () => normalizeWebhookCreateInput(await readJsonBody(request)))
+      ),
+    }),
+  ],
+  [
+    'GET /api/v1/admin/access-tokens',
+    async ({ service }) => ({ body: await service.listAccessTokens() }),
+  ],
+  [
+    'POST /api/v1/admin/access-tokens',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await service.createAccessToken(
+        await withBadRequest(async () =>
+          normalizeAccessTokenCreateInput(await readJsonBody(request))
+        )
+      ),
+    }),
+  ],
+  ['GET /api/v1/admin/audit', async ({ service }) => ({ body: await service.listAuditRecords() })],
   [
     'GET /api/v1/admin/jobs/:id',
     async ({ params, service }) => ({
@@ -272,12 +334,54 @@ export async function handleApiRequest(
         );
       }
 
+      const requiredScopes = requiredScopesForRoute(routeMatch.route);
+      let actor = 'anonymous';
+      if (requiredScopes.length > 0) {
+        const tokenHeader = request.headers['x-scbs-token'];
+        const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+        const authorized = await service.authorizeAccessToken(token ?? '', requiredScopes);
+        if (!authorized) {
+          await service.recordAudit({
+            actor: 'unauthorized',
+            action: routeMatch.route.operationId,
+            scope: routeMatch.route.path.startsWith('/api/v1/admin/') ? 'admin' : 'repo',
+            resourceType: routeMatch.route.path.startsWith('/api/v1/admin/')
+              ? 'route'
+              : 'repository',
+            resourceId: routeMatch.params.id,
+            outcome: 'denied',
+            metadata: { requiredScopes, path, method },
+          });
+          writeJson(response, 403, {
+            error: 'Forbidden',
+            message: 'Missing required SCBS token scope.',
+          });
+          return;
+        }
+
+        actor = authorized.label;
+      }
+
       const result = await handler({
         params: routeMatch.params,
         service,
         report,
         request,
       });
+      if (
+        routeMatch.route.path.startsWith('/api/v1/admin/') ||
+        routeMatch.route.path.startsWith('/api/v1/repos')
+      ) {
+        await service.recordAudit({
+          actor,
+          action: routeMatch.route.operationId,
+          scope: routeMatch.route.path.startsWith('/api/v1/admin/') ? 'admin' : 'repo',
+          resourceType: routeMatch.route.path.startsWith('/api/v1/admin/') ? 'route' : 'repository',
+          resourceId: routeMatch.params.id,
+          outcome: 'success',
+          metadata: { path, method },
+        });
+      }
       writeJson(response, result.statusCode ?? routeMatch.route.success.statusCode, result.body);
       return;
     }

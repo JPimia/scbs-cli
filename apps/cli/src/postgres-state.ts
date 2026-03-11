@@ -4,15 +4,21 @@ import path from 'node:path';
 
 import { type SeedState, createSeedState } from './in-memory-service';
 import type {
+  AccessScope,
+  AccessTokenRecord,
+  AuditRecord,
   BundleRecord,
   ClaimRecord,
   FactRecord,
   FreshnessEventRecord,
   FreshnessJobRecord,
+  OutboxEventRecord,
   ReceiptRecord,
+  ReceiptReviewRecord,
   RepoRecord,
   StorageSurface,
   ViewRecord,
+  WebhookRecord,
 } from './types';
 
 interface PostgresStateOptions {
@@ -46,6 +52,25 @@ const asStringArray = (value: unknown): string[] =>
 
 const asTimestamp = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
+
+const asLifecycleTopics = (value: unknown): WebhookRecord['events'] =>
+  asStringArray(value).filter((entry): entry is WebhookRecord['events'][number] =>
+    [
+      'repo.registered',
+      'repo.scanned',
+      'repo.changed',
+      'bundle.planned',
+      'bundle.expired',
+      'receipt.submitted',
+      'receipt.validated',
+      'receipt.rejected',
+    ].includes(entry)
+  );
+
+const asAccessScopes = (value: unknown): AccessScope[] =>
+  asStringArray(value).filter((entry): entry is AccessScope =>
+    ['admin:read', 'admin:write', 'repo:read', 'repo:write'].includes(entry)
+  );
 
 const escapeSqlString = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
@@ -110,6 +135,11 @@ export class PostgresSeedStateStore {
       receipts,
       freshnessEvents,
       freshnessJobs,
+      receiptReviews,
+      outboxEvents,
+      webhooks,
+      accessTokens,
+      auditRecords,
     ] = await Promise.all([
       this.queryJson<
         Array<{ id: string; name: string; root_path: string | null; metadata: unknown }>
@@ -222,6 +252,76 @@ export class PostgresSeedStateStore {
         }>
       >(
         "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, job_kind, repo_id, event_id, target_id, changed_files, status, attempt_count, max_attempts, available_at, created_at, updated_at, started_at, completed_at, last_error FROM recompute_jobs) t"
+      ),
+      this.queryJson<
+        Array<{
+          id: string;
+          receipt_id: string;
+          bundle_id: string | null;
+          action: string;
+          actor: string;
+          note: string;
+          created_at: unknown;
+        }>
+      >(
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, receipt_id, bundle_id, action, actor, note, created_at FROM receipt_reviews) t"
+      ),
+      this.queryJson<
+        Array<{
+          id: string;
+          topic: string;
+          aggregate_type: string;
+          aggregate_id: string;
+          repo_id: string | null;
+          status: string;
+          payload: unknown;
+          deliveries: unknown;
+          created_at: unknown;
+          updated_at: unknown;
+        }>
+      >(
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, topic, aggregate_type, aggregate_id, repo_id, status, payload, deliveries, created_at, updated_at FROM outbox_events) t"
+      ),
+      this.queryJson<
+        Array<{
+          id: string;
+          label: string;
+          url: string;
+          events: unknown;
+          active: boolean;
+          created_at: unknown;
+          updated_at: unknown;
+          last_delivery_at: unknown;
+        }>
+      >(
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, label, url, events, active, created_at, updated_at, last_delivery_at FROM webhooks) t"
+      ),
+      this.queryJson<
+        Array<{
+          id: string;
+          label: string;
+          scopes: unknown;
+          token: string;
+          created_at: unknown;
+          last_used_at: unknown;
+        }>
+      >(
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, label, scopes, token, created_at, last_used_at FROM access_tokens) t"
+      ),
+      this.queryJson<
+        Array<{
+          id: string;
+          actor: string;
+          action: string;
+          scope: string;
+          resource_type: string;
+          resource_id: string | null;
+          outcome: string;
+          metadata: unknown;
+          created_at: unknown;
+        }>
+      >(
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, actor, action, scope, resource_type, resource_id, outcome, metadata, created_at FROM audit_records) t"
       ),
     ]);
 
@@ -366,6 +466,100 @@ export class PostgresSeedStateStore {
             lastError: row.last_error ?? undefined,
           }) satisfies FreshnessJobRecord
       ),
+      receiptReviews: receiptReviews.map(
+        (row) =>
+          ({
+            id: row.id,
+            receiptId: row.receipt_id,
+            bundleId: row.bundle_id,
+            action:
+              row.action === 'submitted' ||
+              row.action === 'queued_for_validation' ||
+              row.action === 'validated' ||
+              row.action === 'rejected'
+                ? row.action
+                : 'validation_failed',
+            actor: row.actor,
+            note: row.note,
+            createdAt: asTimestamp(row.created_at) ?? now(),
+          }) satisfies ReceiptReviewRecord
+      ),
+      outboxEvents: outboxEvents.map(
+        (row) =>
+          ({
+            id: row.id,
+            topic:
+              row.topic === 'repo.registered' ||
+              row.topic === 'repo.scanned' ||
+              row.topic === 'repo.changed' ||
+              row.topic === 'bundle.expired' ||
+              row.topic === 'receipt.submitted' ||
+              row.topic === 'receipt.validated' ||
+              row.topic === 'receipt.rejected'
+                ? row.topic
+                : 'bundle.planned',
+            aggregateType:
+              row.aggregate_type === 'repo' ||
+              row.aggregate_type === 'receipt' ||
+              row.aggregate_type === 'bundle'
+                ? row.aggregate_type
+                : 'bundle',
+            aggregateId: row.aggregate_id,
+            repoId: row.repo_id ?? undefined,
+            status:
+              row.status === 'delivered' || row.status === 'failed' || row.status === 'partial'
+                ? row.status
+                : 'pending',
+            payload: asRecord(row.payload),
+            deliveries: Array.isArray(row.deliveries) ? row.deliveries : [],
+            createdAt: asTimestamp(row.created_at) ?? now(),
+            updatedAt: asTimestamp(row.updated_at) ?? now(),
+          }) satisfies OutboxEventRecord
+      ),
+      webhooks: webhooks.map(
+        (row) =>
+          ({
+            id: row.id,
+            label: row.label,
+            url: row.url,
+            events: asLifecycleTopics(row.events),
+            active: row.active,
+            createdAt: asTimestamp(row.created_at) ?? now(),
+            updatedAt: asTimestamp(row.updated_at) ?? now(),
+            lastDeliveryAt: asTimestamp(row.last_delivery_at),
+          }) satisfies WebhookRecord
+      ),
+      accessTokens: accessTokens.map(
+        (row) =>
+          ({
+            id: row.id,
+            label: row.label,
+            scopes: asAccessScopes(row.scopes),
+            token: row.token,
+            createdAt: asTimestamp(row.created_at) ?? now(),
+            lastUsedAt: asTimestamp(row.last_used_at),
+          }) satisfies AccessTokenRecord & { token: string }
+      ),
+      auditRecords: auditRecords.map(
+        (row) =>
+          ({
+            id: row.id,
+            actor: row.actor,
+            action: row.action,
+            scope:
+              row.scope === 'admin' ||
+              row.scope === 'repo' ||
+              row.scope === 'bundle' ||
+              row.scope === 'receipt'
+                ? row.scope
+                : 'system',
+            resourceType: row.resource_type,
+            resourceId: row.resource_id ?? undefined,
+            outcome: row.outcome === 'denied' || row.outcome === 'error' ? row.outcome : 'success',
+            metadata: asRecord(row.metadata),
+            createdAt: asTimestamp(row.created_at) ?? now(),
+          }) satisfies AuditRecord
+      ),
     };
   }
 
@@ -373,9 +567,13 @@ export class PostgresSeedStateStore {
     await this.ensureSchema();
 
     const timestamp = now();
-    const viewsById = new Map(state.views.map((view) => [view.id, view]));
     const statements = [
       'BEGIN',
+      'DELETE FROM audit_records',
+      'DELETE FROM access_tokens',
+      'DELETE FROM webhooks',
+      'DELETE FROM outbox_events',
+      'DELETE FROM receipt_reviews',
       'DELETE FROM bundle_cache_entries',
       'DELETE FROM recompute_jobs',
       'DELETE FROM freshness_events',
@@ -424,6 +622,26 @@ export class PostgresSeedStateStore {
       ...state.freshnessJobs.map(
         (job) =>
           `INSERT INTO recompute_jobs (id, job_kind, repo_id, event_id, target_id, changed_files, status, attempt_count, max_attempts, available_at, created_at, updated_at, started_at, completed_at, last_error) VALUES (${textLiteral(job.id)}, ${textLiteral(job.kind)}, ${textLiteral(job.repoId)}, ${textLiteral(job.eventId)}, ${textLiteral(job.targetId)}, ${jsonbLiteral(job.files)}, ${textLiteral(job.status)}, ${job.attempts}, ${job.maxAttempts}, ${textLiteral(job.availableAt)}, ${textLiteral(job.createdAt)}, ${textLiteral(job.updatedAt)}, ${textLiteral(job.startedAt)}, ${textLiteral(job.completedAt)}, ${textLiteral(job.lastError)})`
+      ),
+      ...state.receiptReviews.map(
+        (review) =>
+          `INSERT INTO receipt_reviews (id, receipt_id, bundle_id, action, actor, note, created_at) VALUES (${textLiteral(review.id)}, ${textLiteral(review.receiptId)}, ${textLiteral(review.bundleId)}, ${textLiteral(review.action)}, ${textLiteral(review.actor)}, ${textLiteral(review.note)}, ${textLiteral(review.createdAt)})`
+      ),
+      ...state.outboxEvents.map(
+        (event) =>
+          `INSERT INTO outbox_events (id, topic, aggregate_type, aggregate_id, repo_id, status, payload, deliveries, created_at, updated_at) VALUES (${textLiteral(event.id)}, ${textLiteral(event.topic)}, ${textLiteral(event.aggregateType)}, ${textLiteral(event.aggregateId)}, ${textLiteral(event.repoId)}, ${textLiteral(event.status)}, ${jsonbLiteral(event.payload)}, ${jsonbLiteral(event.deliveries)}, ${textLiteral(event.createdAt)}, ${textLiteral(event.updatedAt)})`
+      ),
+      ...state.webhooks.map(
+        (webhook) =>
+          `INSERT INTO webhooks (id, label, url, events, active, created_at, updated_at, last_delivery_at) VALUES (${textLiteral(webhook.id)}, ${textLiteral(webhook.label)}, ${textLiteral(webhook.url)}, ${jsonbLiteral(webhook.events)}, ${webhook.active ? 'TRUE' : 'FALSE'}, ${textLiteral(webhook.createdAt)}, ${textLiteral(webhook.updatedAt)}, ${textLiteral(webhook.lastDeliveryAt)})`
+      ),
+      ...state.accessTokens.map(
+        (token) =>
+          `INSERT INTO access_tokens (id, label, scopes, token, created_at, last_used_at) VALUES (${textLiteral(token.id)}, ${textLiteral(token.label)}, ${jsonbLiteral(token.scopes)}, ${textLiteral((token as AccessTokenRecord & { token: string }).token)}, ${textLiteral(token.createdAt)}, ${textLiteral(token.lastUsedAt)})`
+      ),
+      ...state.auditRecords.map(
+        (record) =>
+          `INSERT INTO audit_records (id, actor, action, scope, resource_type, resource_id, outcome, metadata, created_at) VALUES (${textLiteral(record.id)}, ${textLiteral(record.actor)}, ${textLiteral(record.action)}, ${textLiteral(record.scope)}, ${textLiteral(record.resourceType)}, ${textLiteral(record.resourceId)}, ${textLiteral(record.outcome)}, ${jsonbLiteral(record.metadata ?? {})}, ${textLiteral(record.createdAt)})`
       ),
       'COMMIT',
     ];
@@ -488,6 +706,26 @@ export class PostgresSeedStateStore {
     await this.exec([
       '-c',
       'UPDATE recompute_jobs SET available_at = COALESCE(available_at, created_at) WHERE available_at IS NULL',
+    ]);
+    await this.exec([
+      '-c',
+      'CREATE TABLE IF NOT EXISTS receipt_reviews (id TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, bundle_id TEXT, action TEXT NOT NULL, actor TEXT NOT NULL, note TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL)',
+    ]);
+    await this.exec([
+      '-c',
+      "CREATE TABLE IF NOT EXISTS outbox_events (id TEXT PRIMARY KEY, topic TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, repo_id TEXT, status TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, deliveries JSONB NOT NULL DEFAULT '[]'::jsonb, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)",
+    ]);
+    await this.exec([
+      '-c',
+      "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, label TEXT NOT NULL, url TEXT NOT NULL, events JSONB NOT NULL DEFAULT '[]'::jsonb, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, last_delivery_at TIMESTAMPTZ)",
+    ]);
+    await this.exec([
+      '-c',
+      "CREATE TABLE IF NOT EXISTS access_tokens (id TEXT PRIMARY KEY, label TEXT NOT NULL, scopes JSONB NOT NULL DEFAULT '[]'::jsonb, token TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, last_used_at TIMESTAMPTZ)",
+    ]);
+    await this.exec([
+      '-c',
+      "CREATE TABLE IF NOT EXISTS audit_records (id TEXT PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, scope TEXT NOT NULL, resource_type TEXT NOT NULL, resource_id TEXT, outcome TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL)",
     ]);
 
     this.schemaReady = true;

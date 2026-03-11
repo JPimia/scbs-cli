@@ -77,7 +77,11 @@ export interface FreshnessImpact {
   state: FreshnessState;
 }
 
-export type FreshnessJobKind = 'freshness_recompute' | 'repo_scan' | 'receipt_validation';
+export type FreshnessJobKind =
+  | 'freshness_recompute'
+  | 'repo_scan'
+  | 'receipt_validation'
+  | 'webhook_delivery';
 
 export type FreshnessJobStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -175,12 +179,123 @@ export interface ReceiptRecord {
   status: 'pending' | 'validated' | 'rejected';
 }
 
+export interface BundleListEntry {
+  id: string;
+  taskTitle: string;
+  repoIds: string[];
+  freshness: FreshnessState;
+  receiptCount: number;
+  pendingReceiptCount: number;
+  hasPlannerDiagnostics: boolean;
+  createdAt: string;
+}
+
+export interface ReceiptReviewRecord {
+  id: string;
+  receiptId: string;
+  bundleId: string | null;
+  action: 'submitted' | 'queued_for_validation' | 'validated' | 'rejected' | 'validation_failed';
+  actor: string;
+  note: string;
+  createdAt: string;
+}
+
+export interface BundleReviewRecord {
+  bundle: BundleRecord;
+  receipts: ReceiptRecord[];
+  receiptHistory: ReceiptReviewRecord[];
+  plannerDiagnostics?: Record<string, unknown>;
+}
+
+export type LifecycleEventTopic =
+  | 'repo.registered'
+  | 'repo.scanned'
+  | 'repo.changed'
+  | 'bundle.planned'
+  | 'bundle.expired'
+  | 'receipt.submitted'
+  | 'receipt.validated'
+  | 'receipt.rejected';
+
+export type OutboxDeliveryStatus = 'pending' | 'delivered' | 'failed';
+
+export interface OutboxDeliveryRecord {
+  webhookId: string;
+  status: OutboxDeliveryStatus;
+  attempts: number;
+  lastAttemptAt?: string;
+  deliveredAt?: string;
+  lastError?: string;
+}
+
+export interface OutboxEventRecord {
+  id: string;
+  topic: LifecycleEventTopic;
+  aggregateType: 'repo' | 'bundle' | 'receipt';
+  aggregateId: string;
+  repoId?: string;
+  status: 'pending' | 'delivered' | 'failed' | 'partial';
+  payload: Record<string, unknown>;
+  deliveries: OutboxDeliveryRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebhookRecord {
+  id: string;
+  label: string;
+  url: string;
+  events: LifecycleEventTopic[];
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastDeliveryAt?: string;
+}
+
+export type AccessScope = 'admin:read' | 'admin:write' | 'repo:read' | 'repo:write';
+
+export interface AccessTokenRecord {
+  id: string;
+  label: string;
+  scopes: AccessScope[];
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+export interface AccessTokenGrant {
+  token: string;
+  record: AccessTokenRecord;
+}
+
+export interface AuditRecord {
+  id: string;
+  actor: string;
+  action: string;
+  scope: 'admin' | 'repo' | 'bundle' | 'receipt' | 'system';
+  resourceType: string;
+  resourceId?: string;
+  outcome: 'success' | 'denied' | 'error';
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
 export type BundlePlanInput = BundleRequest;
 
 export interface ReceiptSubmitInput {
   bundleId: string | null;
   agent: string;
   summary: string;
+}
+
+export interface WebhookCreateInput {
+  label: string;
+  url: string;
+  events: LifecycleEventTopic[];
+}
+
+export interface AccessTokenCreateInput {
+  label: string;
+  scopes: AccessScope[];
 }
 
 export interface RegisterRepoInput {
@@ -199,6 +314,26 @@ export interface ServerScbsService {
   listJobs(): Promise<JobListReport>;
   showJob(id: string): Promise<FreshnessJobRecord>;
   retryJob(id: string): Promise<FreshnessJobRecord>;
+  listBundles(): Promise<BundleListEntry[]>;
+  reviewBundle(id: string): Promise<BundleReviewRecord>;
+  listReceiptHistory(id?: string): Promise<ReceiptReviewRecord[]>;
+  listOutboxEvents(): Promise<OutboxEventRecord[]>;
+  showOutboxEvent(id: string): Promise<OutboxEventRecord>;
+  listWebhooks(): Promise<WebhookRecord[]>;
+  createWebhook(input: WebhookCreateInput): Promise<WebhookRecord>;
+  listAccessTokens(): Promise<AccessTokenRecord[]>;
+  createAccessToken(input: AccessTokenCreateInput): Promise<AccessTokenGrant>;
+  authorizeAccessToken(token: string, scopes: AccessScope[]): Promise<AccessTokenRecord | null>;
+  listAuditRecords(): Promise<AuditRecord[]>;
+  recordAudit(input: {
+    actor: string;
+    action: string;
+    scope: AuditRecord['scope'];
+    resourceType: string;
+    resourceId?: string;
+    outcome: AuditRecord['outcome'];
+    metadata?: Record<string, unknown>;
+  }): Promise<AuditRecord>;
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;
   showRepo(id: string): Promise<RepoRecord>;

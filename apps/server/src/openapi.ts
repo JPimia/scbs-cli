@@ -30,6 +30,10 @@ function schemaNameFor(type: string): string {
       return 'ApiIndexResponse';
     case 'doctorReport':
       return 'DoctorReport';
+    case 'bundleList':
+      return 'BundleListEntryList';
+    case 'bundleReview':
+      return 'BundleReviewRecord';
     case 'repoRecord':
       return 'RepoRecord';
     case 'repoList':
@@ -66,10 +70,26 @@ function schemaNameFor(type: string): string {
       return 'JobRecord';
     case 'jobList':
       return 'JobListReport';
+    case 'receiptReviewList':
+      return 'ReceiptReviewRecordList';
     case 'receiptRecord':
       return 'ReceiptRecord';
     case 'receiptList':
       return 'ReceiptRecordList';
+    case 'outboxEvent':
+      return 'OutboxEventRecord';
+    case 'outboxEventList':
+      return 'OutboxEventRecordList';
+    case 'webhookRecord':
+      return 'WebhookRecord';
+    case 'webhookRecordList':
+      return 'WebhookRecordList';
+    case 'accessTokenRecordList':
+      return 'AccessTokenRecordList';
+    case 'accessTokenGrant':
+      return 'AccessTokenGrant';
+    case 'auditRecordList':
+      return 'AuditRecordList';
     case 'missionControlBundleStatus':
       return 'MissionControlBundleStatus';
     case 'sisuBundleSnapshot':
@@ -84,6 +104,10 @@ function schemaNameFor(type: string): string {
       return 'QueueControlInput';
     case 'workerDrainInput':
       return 'WorkerDrainInput';
+    case 'webhookCreateInput':
+      return 'WebhookCreateInput';
+    case 'accessTokenCreateInput':
+      return 'AccessTokenCreateInput';
     case 'repoChangesInput':
       return 'RepoChangesInput';
     case 'receiptSubmitInput':
@@ -221,7 +245,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           type: 'array',
           items: {
             type: 'string',
-            enum: ['freshness_recompute', 'repo_scan', 'receipt_validation'],
+            enum: ['freshness_recompute', 'repo_scan', 'receipt_validation', 'webhook_delivery'],
           },
         },
         jobIds: {
@@ -246,6 +270,17 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             'root',
             'adminDiagnostics',
             'listJobs',
+            'listAdminBundles',
+            'reviewBundle',
+            'listReceiptHistory',
+            'showReceiptHistory',
+            'listOutboxEvents',
+            'showOutboxEvent',
+            'listWebhooks',
+            'createWebhook',
+            'listAccessTokens',
+            'createAccessToken',
+            'listAuditRecords',
             'showJob',
             'retryJob',
             'runWorker',
@@ -283,6 +318,17 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             root: { type: 'string' },
             adminDiagnostics: { type: 'string' },
             listJobs: { type: 'string' },
+            listAdminBundles: { type: 'string' },
+            reviewBundle: { type: 'string' },
+            listReceiptHistory: { type: 'string' },
+            showReceiptHistory: { type: 'string' },
+            listOutboxEvents: { type: 'string' },
+            showOutboxEvent: { type: 'string' },
+            listWebhooks: { type: 'string' },
+            createWebhook: { type: 'string' },
+            listAccessTokens: { type: 'string' },
+            createAccessToken: { type: 'string' },
+            listAuditRecords: { type: 'string' },
             showJob: { type: 'string' },
             retryJob: { type: 'string' },
             runWorker: { type: 'string' },
@@ -768,7 +814,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
         id: { type: 'string' },
         kind: {
           type: 'string',
-          enum: ['freshness_recompute', 'repo_scan', 'receipt_validation'],
+          enum: ['freshness_recompute', 'repo_scan', 'receipt_validation', 'webhook_delivery'],
         },
         repoId: { type: 'string' },
         eventId: { type: 'string' },
@@ -815,6 +861,199 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           items: { type: 'string' },
         },
       },
+    },
+    BundleListEntry: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'id',
+        'taskTitle',
+        'repoIds',
+        'freshness',
+        'receiptCount',
+        'pendingReceiptCount',
+        'hasPlannerDiagnostics',
+        'createdAt',
+      ],
+      properties: {
+        id: { type: 'string' },
+        taskTitle: { type: 'string' },
+        repoIds: { type: 'array', items: { type: 'string' } },
+        freshness: componentRef('FreshnessState'),
+        receiptCount: { type: 'number' },
+        pendingReceiptCount: { type: 'number' },
+        hasPlannerDiagnostics: { type: 'boolean' },
+        createdAt: { type: 'string' },
+      },
+    },
+    BundleListEntryList: {
+      type: 'array',
+      items: componentRef('BundleListEntry'),
+    },
+    ReceiptReviewRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'receiptId', 'bundleId', 'action', 'actor', 'note', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        receiptId: { type: 'string' },
+        bundleId: { type: ['string', 'null'] },
+        action: {
+          type: 'string',
+          enum: [
+            'submitted',
+            'queued_for_validation',
+            'validated',
+            'rejected',
+            'validation_failed',
+          ],
+        },
+        actor: { type: 'string' },
+        note: { type: 'string' },
+        createdAt: { type: 'string' },
+      },
+    },
+    ReceiptReviewRecordList: {
+      type: 'array',
+      items: componentRef('ReceiptReviewRecord'),
+    },
+    BundleReviewRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['bundle', 'receipts', 'receiptHistory'],
+      properties: {
+        bundle: componentRef('BundleRecord'),
+        receipts: { type: 'array', items: componentRef('ReceiptRecord') },
+        receiptHistory: { type: 'array', items: componentRef('ReceiptReviewRecord') },
+        plannerDiagnostics: { type: 'object' },
+      },
+    },
+    WebhookCreateInput: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['label', 'url', 'events'],
+      properties: {
+        label: { type: 'string' },
+        url: { type: 'string' },
+        events: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    WebhookRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'label', 'url', 'events', 'active', 'createdAt', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        url: { type: 'string' },
+        events: { type: 'array', items: { type: 'string' } },
+        active: { type: 'boolean' },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' },
+        lastDeliveryAt: { type: 'string' },
+      },
+    },
+    WebhookRecordList: {
+      type: 'array',
+      items: componentRef('WebhookRecord'),
+    },
+    OutboxDeliveryRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['webhookId', 'status', 'attempts'],
+      properties: {
+        webhookId: { type: 'string' },
+        status: { type: 'string', enum: ['pending', 'delivered', 'failed'] },
+        attempts: { type: 'number' },
+        lastAttemptAt: { type: 'string' },
+        deliveredAt: { type: 'string' },
+        lastError: { type: 'string' },
+      },
+    },
+    OutboxEventRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'id',
+        'topic',
+        'aggregateType',
+        'aggregateId',
+        'status',
+        'payload',
+        'deliveries',
+        'createdAt',
+        'updatedAt',
+      ],
+      properties: {
+        id: { type: 'string' },
+        topic: { type: 'string' },
+        aggregateType: { type: 'string', enum: ['repo', 'bundle', 'receipt'] },
+        aggregateId: { type: 'string' },
+        repoId: { type: 'string' },
+        status: { type: 'string', enum: ['pending', 'delivered', 'failed', 'partial'] },
+        payload: { type: 'object' },
+        deliveries: { type: 'array', items: componentRef('OutboxDeliveryRecord') },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' },
+      },
+    },
+    OutboxEventRecordList: {
+      type: 'array',
+      items: componentRef('OutboxEventRecord'),
+    },
+    AccessTokenCreateInput: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['label', 'scopes'],
+      properties: {
+        label: { type: 'string' },
+        scopes: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    AccessTokenRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'label', 'scopes', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        scopes: { type: 'array', items: { type: 'string' } },
+        createdAt: { type: 'string' },
+        lastUsedAt: { type: 'string' },
+      },
+    },
+    AccessTokenRecordList: {
+      type: 'array',
+      items: componentRef('AccessTokenRecord'),
+    },
+    AccessTokenGrant: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['token', 'record'],
+      properties: {
+        token: { type: 'string' },
+        record: componentRef('AccessTokenRecord'),
+      },
+    },
+    AuditRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'actor', 'action', 'scope', 'resourceType', 'outcome', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        actor: { type: 'string' },
+        action: { type: 'string' },
+        scope: { type: 'string', enum: ['admin', 'repo', 'bundle', 'receipt', 'system'] },
+        resourceType: { type: 'string' },
+        resourceId: { type: 'string' },
+        outcome: { type: 'string', enum: ['success', 'denied', 'error'] },
+        metadata: { type: 'object' },
+        createdAt: { type: 'string' },
+      },
+    },
+    AuditRecordList: {
+      type: 'array',
+      items: componentRef('AuditRecord'),
     },
     WorkerRunReport: {
       type: 'object',

@@ -165,6 +165,61 @@ CREATE TABLE recompute_jobs (
   last_error TEXT
 );
 
+CREATE TABLE receipt_reviews (
+  id TEXT PRIMARY KEY,
+  receipt_id TEXT NOT NULL,
+  bundle_id TEXT,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  note TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE outbox_events (
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id TEXT NOT NULL,
+  repo_id TEXT,
+  status TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  deliveries JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE webhooks (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  url TEXT NOT NULL,
+  events JSONB NOT NULL DEFAULT '[]'::jsonb,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  last_delivery_at TIMESTAMPTZ
+);
+
+CREATE TABLE access_tokens (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  token TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  last_used_at TIMESTAMPTZ
+);
+
+CREATE TABLE audit_records (
+  id TEXT PRIMARY KEY,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  outcome TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE INDEX idx_file_records_repo_id ON file_records (repo_id);
 CREATE INDEX idx_symbol_records_repo_id ON symbol_records (repo_id);
 CREATE INDEX idx_dependency_edges_repo_id ON dependency_edges (repo_id);
@@ -175,3 +230,6 @@ CREATE INDEX idx_task_bundles_cache_key ON task_bundles (cache_key);
 CREATE INDEX idx_agent_receipts_status ON agent_receipts (status);
 CREATE INDEX idx_freshness_events_repo_id ON freshness_events (repo_id);
 CREATE INDEX idx_recompute_jobs_status ON recompute_jobs (status);
+CREATE INDEX idx_receipt_reviews_receipt_id ON receipt_reviews (receipt_id);
+CREATE INDEX idx_outbox_events_topic ON outbox_events (topic);
+CREATE INDEX idx_audit_records_scope ON audit_records (scope);

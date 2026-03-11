@@ -1,7 +1,14 @@
 import type { BundleRequest } from '../../../packages/protocol/src/index';
 import type {
+  AccessScope,
+  AccessTokenCreateInput,
+  AccessTokenGrant,
+  AccessTokenRecord,
   ApiSurface,
+  AuditRecord,
+  BundleListEntry,
   BundleRecord,
+  BundleReviewRecord,
   ClaimRecord,
   DoctorReport,
   FactRecord,
@@ -13,10 +20,14 @@ import type {
   InitReport,
   JobListReport,
   MigrationReport,
+  OutboxEventRecord,
   ReceiptRecord,
+  ReceiptReviewRecord,
   RepoRecord,
   ServeReport,
   ViewRecord,
+  WebhookCreateInput,
+  WebhookRecord,
   WorkerLoopReport,
 } from './types';
 
@@ -60,6 +71,26 @@ export interface ScbsService {
   listJobs(): Promise<JobListReport>;
   showJob(id: string): Promise<FreshnessJobRecord>;
   retryJob(id: string): Promise<FreshnessJobRecord>;
+  listBundles(): Promise<BundleListEntry[]>;
+  reviewBundle(id: string): Promise<BundleReviewRecord>;
+  listReceiptHistory(id?: string): Promise<ReceiptReviewRecord[]>;
+  listOutboxEvents(): Promise<OutboxEventRecord[]>;
+  showOutboxEvent(id: string): Promise<OutboxEventRecord>;
+  listWebhooks(): Promise<WebhookRecord[]>;
+  createWebhook(input: WebhookCreateInput): Promise<WebhookRecord>;
+  listAccessTokens(): Promise<AccessTokenRecord[]>;
+  createAccessToken(input: AccessTokenCreateInput): Promise<AccessTokenGrant>;
+  authorizeAccessToken(token: string, scopes: AccessScope[]): Promise<AccessTokenRecord | null>;
+  listAuditRecords(): Promise<AuditRecord[]>;
+  recordAudit(input: {
+    actor: string;
+    action: string;
+    scope: AuditRecord['scope'];
+    resourceType: string;
+    resourceId?: string;
+    outcome: AuditRecord['outcome'];
+    metadata?: Record<string, unknown>;
+  }): Promise<AuditRecord>;
   migrate(): Promise<MigrationReport>;
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;

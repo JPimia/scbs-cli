@@ -19,8 +19,15 @@ import type {
 } from './service';
 import { createApiCapabilities } from './service';
 import type {
+  AccessScope,
+  AccessTokenCreateInput,
+  AccessTokenGrant,
+  AccessTokenRecord,
   ApiSurface,
+  AuditRecord,
+  BundleListEntry,
   BundleRecord,
+  BundleReviewRecord,
   ClaimRecord,
   DoctorReport,
   FactRecord,
@@ -33,10 +40,14 @@ import type {
   InitReport,
   JobListReport,
   MigrationReport,
+  OutboxEventRecord,
   ReceiptRecord,
+  ReceiptReviewRecord,
   RepoRecord,
   ServeReport,
   ViewRecord,
+  WebhookCreateInput,
+  WebhookRecord,
   WorkerLoopReport,
 } from './types';
 
@@ -50,6 +61,11 @@ export interface SeedState {
   bundleCache: Array<{ key: string; bundleId: string; freshness: FreshnessState }>;
   freshnessEvents: FreshnessEventRecord[];
   freshnessJobs: FreshnessJobRecord[];
+  receiptReviews: ReceiptReviewRecord[];
+  outboxEvents: OutboxEventRecord[];
+  webhooks: WebhookRecord[];
+  accessTokens: DurableAccessTokenRecord[];
+  auditRecords: AuditRecord[];
 }
 
 type GraphSeedState = SeedState & {
@@ -69,6 +85,23 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, '');
 
 const dedupe = (values: string[] | undefined): string[] => [...new Set(values ?? [])];
+
+const hasScopes = (granted: AccessScope[], required: AccessScope[]): boolean =>
+  required.every((scope) => granted.includes(scope));
+
+const asLifecycleTopics = (values: string[] | undefined): WebhookRecord['events'] =>
+  (values ?? []).filter((value): value is WebhookRecord['events'][number] =>
+    [
+      'repo.registered',
+      'repo.scanned',
+      'repo.changed',
+      'bundle.planned',
+      'bundle.expired',
+      'receipt.submitted',
+      'receipt.validated',
+      'receipt.rejected',
+    ].includes(value)
+  );
 
 const fileMatchesChange = (filePath: string | undefined, changedFiles: string[]): boolean => {
   if (!filePath) {
@@ -117,6 +150,10 @@ type DurableReceiptRecord = ReceiptRecord &
   Partial<
     Pick<AgentReceipt, 'repoIds' | 'type' | 'fromRole' | 'payload' | 'createdAt' | 'updatedAt'>
   >;
+
+type DurableAccessTokenRecord = AccessTokenRecord & {
+  token: string;
+};
 
 type DurableClaimRecord = ClaimRecord &
   Partial<
@@ -315,6 +352,21 @@ export const createSeedState = (): SeedState => {
     ],
     freshnessEvents: [],
     freshnessJobs: [],
+    receiptReviews: [
+      {
+        id: 'receipt-review_bootstrap',
+        receiptId: 'receipt_bootstrap',
+        bundleId,
+        action: 'validated',
+        actor: 'system',
+        note: 'Bootstrap receipt was accepted into the initial state.',
+        createdAt: now(),
+      },
+    ],
+    outboxEvents: [],
+    webhooks: [],
+    accessTokens: [],
+    auditRecords: [],
   };
 };
 
@@ -444,6 +496,11 @@ export class InMemoryScbsService implements ScbsService {
     seedState.bundleCache ??= [];
     seedState.freshnessEvents ??= [];
     seedState.freshnessJobs ??= [];
+    seedState.receiptReviews ??= [];
+    seedState.outboxEvents ??= [];
+    seedState.webhooks ??= [];
+    seedState.accessTokens ??= [];
+    seedState.auditRecords ??= [];
     this.state = seedState;
   }
 
@@ -537,6 +594,162 @@ export class InMemoryScbsService implements ScbsService {
     return job;
   }
 
+  public async listBundles(): Promise<BundleListEntry[]> {
+    return [...this.state.bundles]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((bundle) => {
+        const receipts = this.state.receipts.filter((receipt) => receipt.bundleId === bundle.id);
+        return {
+          id: bundle.id,
+          taskTitle:
+            typeof bundle.metadata?.taskTitle === 'string'
+              ? bundle.metadata.taskTitle
+              : bundle.summary,
+          repoIds: bundle.repoIds,
+          freshness: bundle.freshness,
+          receiptCount: receipts.length,
+          pendingReceiptCount: receipts.filter((receipt) => receipt.status === 'pending').length,
+          hasPlannerDiagnostics:
+            Boolean(bundle.metadata) &&
+            typeof bundle.metadata === 'object' &&
+            'plannerDiagnostics' in bundle.metadata,
+          createdAt: bundle.createdAt,
+        };
+      });
+  }
+
+  public async reviewBundle(id: string): Promise<BundleReviewRecord> {
+    const bundle = requireById(this.state.bundles, id, 'Bundle');
+    const receipts = this.state.receipts.filter((receipt) => receipt.bundleId === bundle.id);
+    return {
+      bundle,
+      receipts,
+      receiptHistory: this.state.receiptReviews.filter((entry) => entry.bundleId === bundle.id),
+      plannerDiagnostics:
+        bundle.metadata &&
+        typeof bundle.metadata === 'object' &&
+        typeof bundle.metadata.plannerDiagnostics === 'object'
+          ? (bundle.metadata.plannerDiagnostics as Record<string, unknown>)
+          : undefined,
+    };
+  }
+
+  public async listReceiptHistory(id?: string): Promise<ReceiptReviewRecord[]> {
+    return this.state.receiptReviews.filter((entry) => (id ? entry.receiptId === id : true));
+  }
+
+  public async listOutboxEvents(): Promise<OutboxEventRecord[]> {
+    return [...this.state.outboxEvents].sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt)
+    );
+  }
+
+  public async showOutboxEvent(id: string): Promise<OutboxEventRecord> {
+    return requireById(this.state.outboxEvents, id, 'Outbox event');
+  }
+
+  public async listWebhooks(): Promise<WebhookRecord[]> {
+    return [...this.state.webhooks];
+  }
+
+  public async createWebhook(input: WebhookCreateInput): Promise<WebhookRecord> {
+    const createdAt = now();
+    const webhook: WebhookRecord = {
+      id: `webhook_${slugify(`${input.label}-${createdAt}`)}`,
+      label: input.label,
+      url: input.url,
+      events: asLifecycleTopics(dedupe(input.events)),
+      active: true,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    this.state.webhooks.push(webhook);
+    return webhook;
+  }
+
+  public async listAccessTokens(): Promise<AccessTokenRecord[]> {
+    return this.state.accessTokens.map(({ token: _token, ...record }) => record);
+  }
+
+  public async createAccessToken(input: AccessTokenCreateInput): Promise<AccessTokenGrant> {
+    const createdAt = now();
+    const record: DurableAccessTokenRecord = {
+      id: `token_${slugify(`${input.label}-${createdAt}`)}`,
+      label: input.label,
+      scopes: dedupe(input.scopes) as AccessScope[],
+      createdAt,
+      token: `scbs_${slugify(input.label)}_${createdAt.replaceAll(/[^0-9]/g, '')}`,
+    };
+    this.state.accessTokens.push(record);
+    return {
+      token: record.token,
+      record: {
+        id: record.id,
+        label: record.label,
+        scopes: record.scopes,
+        createdAt: record.createdAt,
+      },
+    };
+  }
+
+  public async authorizeAccessToken(
+    token: string,
+    scopes: AccessScope[]
+  ): Promise<AccessTokenRecord | null> {
+    if (this.state.accessTokens.length === 0) {
+      return {
+        id: 'anonymous-open-access',
+        label: 'anonymous-open-access',
+        scopes,
+        createdAt: now(),
+      };
+    }
+
+    const record = this.state.accessTokens.find((entry) => entry.token === token);
+    if (!record || !hasScopes(record.scopes, scopes)) {
+      return null;
+    }
+
+    record.lastUsedAt = now();
+    return {
+      id: record.id,
+      label: record.label,
+      scopes: record.scopes,
+      createdAt: record.createdAt,
+      lastUsedAt: record.lastUsedAt,
+    };
+  }
+
+  public async listAuditRecords(): Promise<AuditRecord[]> {
+    return [...this.state.auditRecords].sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt)
+    );
+  }
+
+  public async recordAudit(input: {
+    actor: string;
+    action: string;
+    scope: AuditRecord['scope'];
+    resourceType: string;
+    resourceId?: string;
+    outcome: AuditRecord['outcome'];
+    metadata?: Record<string, unknown>;
+  }): Promise<AuditRecord> {
+    const record: AuditRecord = {
+      id: `audit_${slugify(`${input.scope}-${input.action}-${now()}`)}`,
+      actor: input.actor,
+      action: input.action,
+      scope: input.scope,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      outcome: input.outcome,
+      metadata: input.metadata,
+      createdAt: now(),
+    };
+    this.state.auditRecords.push(record);
+    return record;
+  }
+
   public async migrate(): Promise<MigrationReport> {
     return {
       adapter: 'local-json',
@@ -559,6 +772,13 @@ export class InMemoryScbsService implements ScbsService {
     };
 
     this.state.repos.push(repo);
+    this.emitOutboxEvent({
+      topic: 'repo.registered',
+      aggregateType: 'repo',
+      aggregateId: repo.id,
+      repoId: repo.id,
+      payload: { name: repo.name, path: repo.path },
+    });
     return repo;
   }
 
@@ -674,6 +894,18 @@ export class InMemoryScbsService implements ScbsService {
       }
       impacts += 1;
     }
+
+    this.emitOutboxEvent({
+      topic: 'repo.changed',
+      aggregateType: 'repo',
+      aggregateId: input.id,
+      repoId: input.id,
+      payload: {
+        files: input.files,
+        impacts,
+        eventId,
+      },
+    });
 
     return { repoId: input.id, files: input.files, impacts };
   }
@@ -796,6 +1028,17 @@ export class InMemoryScbsService implements ScbsService {
       bundleId: bundle.id,
       freshness: bundle.freshness,
     });
+    this.emitOutboxEvent({
+      topic: 'bundle.planned',
+      aggregateType: 'bundle',
+      aggregateId: bundle.id,
+      repoId: bundle.repoIds[0],
+      payload: {
+        taskTitle,
+        repoIds: bundle.repoIds,
+        freshness: bundle.freshness,
+      },
+    });
     return bundle;
   }
 
@@ -811,6 +1054,15 @@ export class InMemoryScbsService implements ScbsService {
   public async expireBundle(id: string) {
     const bundle = requireById(this.state.bundles, id, 'Bundle');
     bundle.freshness = 'expired';
+    this.emitOutboxEvent({
+      topic: 'bundle.expired',
+      aggregateType: 'bundle',
+      aggregateId: bundle.id,
+      repoId: bundle.repoIds[0],
+      payload: {
+        freshness: bundle.freshness,
+      },
+    });
     return bundle;
   }
 
@@ -875,7 +1127,7 @@ export class InMemoryScbsService implements ScbsService {
     const failedJobIds: string[] = [];
 
     for (const job of selectedJobs) {
-      if (!this.processJob(job)) {
+      if (!(await this.processJob(job))) {
         failedJobIds.push(job.id);
       }
     }
@@ -964,6 +1216,24 @@ export class InMemoryScbsService implements ScbsService {
     };
 
     this.state.receipts.push(receipt as ReceiptRecord);
+    this.recordReceiptReview({
+      receiptId: receipt.id,
+      bundleId: receipt.bundleId,
+      action: 'submitted',
+      actor: input.agent,
+      note: input.summary,
+    });
+    this.emitOutboxEvent({
+      topic: 'receipt.submitted',
+      aggregateType: 'receipt',
+      aggregateId: receipt.id,
+      repoId: bundle?.repoIds[0],
+      payload: {
+        bundleId: receipt.bundleId,
+        agent: receipt.agent,
+        status: receipt.status,
+      },
+    });
     return receipt as ReceiptRecord;
   }
 
@@ -985,6 +1255,13 @@ export class InMemoryScbsService implements ScbsService {
       targetId: receipt.id,
       files: [],
       createdAt,
+    });
+    this.recordReceiptReview({
+      receiptId: receipt.id,
+      bundleId: receipt.bundleId,
+      action: 'queued_for_validation',
+      actor: 'system',
+      note: `Queued validation job ${job.id}.`,
     });
     if (options?.queue ?? false) {
       return receipt as ReceiptRecord;
@@ -1008,6 +1285,23 @@ export class InMemoryScbsService implements ScbsService {
     this.state.receipts = this.state.receipts.map((entry) =>
       entry.id === id ? (validatedReceipt as ReceiptRecord) : entry
     );
+    this.recordReceiptReview({
+      receiptId: id,
+      bundleId: validatedReceipt.bundleId,
+      action: 'validated',
+      actor: 'system',
+      note: validatedReceipt.summary,
+    });
+    this.emitOutboxEvent({
+      topic: 'receipt.validated',
+      aggregateType: 'receipt',
+      aggregateId: validatedReceipt.id,
+      repoId: validatedReceipt.repoIds?.[0],
+      payload: {
+        bundleId: validatedReceipt.bundleId,
+        status: validatedReceipt.status,
+      },
+    });
 
     if (decision.promotedClaims.length > 0) {
       const promotedClaims = decision.promotedClaims.map((claim) => toDurableClaim(claim));
@@ -1042,6 +1336,23 @@ export class InMemoryScbsService implements ScbsService {
   public async rejectReceipt(id: string) {
     const receipt = requireById(this.state.receipts, id, 'Receipt');
     receipt.status = 'rejected';
+    this.recordReceiptReview({
+      receiptId: receipt.id,
+      bundleId: receipt.bundleId,
+      action: 'rejected',
+      actor: 'system',
+      note: receipt.summary,
+    });
+    this.emitOutboxEvent({
+      topic: 'receipt.rejected',
+      aggregateType: 'receipt',
+      aggregateId: receipt.id,
+      repoId: undefined,
+      payload: {
+        bundleId: receipt.bundleId,
+        status: receipt.status,
+      },
+    });
     return receipt;
   }
 
@@ -1161,7 +1472,115 @@ export class InMemoryScbsService implements ScbsService {
     return job;
   }
 
-  private processJob(job: FreshnessJobRecord): boolean {
+  private recordReceiptReview(input: {
+    receiptId: string;
+    bundleId: string | null;
+    action: ReceiptReviewRecord['action'];
+    actor: string;
+    note: string;
+  }): void {
+    this.state.receiptReviews.push({
+      id: `receipt-review_${slugify(`${input.receiptId}-${input.action}-${now()}`)}`,
+      receiptId: input.receiptId,
+      bundleId: input.bundleId,
+      action: input.action,
+      actor: input.actor,
+      note: input.note,
+      createdAt: now(),
+    });
+  }
+
+  private emitOutboxEvent(input: {
+    topic: OutboxEventRecord['topic'];
+    aggregateType: OutboxEventRecord['aggregateType'];
+    aggregateId: string;
+    repoId?: string;
+    payload: Record<string, unknown>;
+  }): void {
+    const createdAt = now();
+    const deliveries = this.state.webhooks
+      .filter((webhook) => webhook.active && webhook.events.includes(input.topic))
+      .map((webhook) => ({
+        webhookId: webhook.id,
+        status: 'pending' as const,
+        attempts: 0,
+      }));
+    const event: OutboxEventRecord = {
+      id: `outbox_${slugify(`${input.topic}-${input.aggregateId}-${createdAt}`)}`,
+      topic: input.topic,
+      aggregateType: input.aggregateType,
+      aggregateId: input.aggregateId,
+      repoId: input.repoId,
+      status: deliveries.length === 0 ? 'delivered' : 'pending',
+      payload: input.payload,
+      deliveries,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    this.state.outboxEvents.push(event);
+
+    for (const delivery of deliveries) {
+      this.enqueueJob({
+        kind: 'webhook_delivery',
+        repoId: input.repoId ?? this.state.repos[0]?.id ?? 'repo_local-default',
+        targetId: `${event.id}:${delivery.webhookId}`,
+        files: [],
+        createdAt,
+      });
+    }
+  }
+
+  private async processWebhookDelivery(job: FreshnessJobRecord): Promise<void> {
+    const [eventId, webhookId] = job.targetId.split(':');
+    if (!eventId || !webhookId) {
+      throw new Error(`Webhook delivery target "${job.targetId}" is invalid.`);
+    }
+
+    const event = requireById(this.state.outboxEvents, eventId, 'Outbox event');
+    const webhook = requireById(this.state.webhooks, webhookId, 'Webhook');
+    const delivery = event.deliveries.find((entry) => entry.webhookId === webhookId);
+    if (!delivery) {
+      throw new Error(
+        `Webhook delivery for event "${eventId}" and webhook "${webhookId}" is missing.`
+      );
+    }
+
+    const attemptAt = now();
+    delivery.attempts += 1;
+    delivery.lastAttemptAt = attemptAt;
+    const response = await fetch(webhook.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-scbs-event-topic': event.topic,
+        'x-scbs-webhook-id': webhook.id,
+      },
+      body: JSON.stringify({
+        id: event.id,
+        topic: event.topic,
+        aggregateType: event.aggregateType,
+        aggregateId: event.aggregateId,
+        repoId: event.repoId,
+        payload: event.payload,
+        createdAt: event.createdAt,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Webhook responded with ${response.status}.`);
+    }
+
+    delivery.status = 'delivered';
+    delivery.deliveredAt = attemptAt;
+    delivery.lastError = undefined;
+    webhook.lastDeliveryAt = attemptAt;
+    event.updatedAt = attemptAt;
+    event.status = event.deliveries.every((entry) => entry.status === 'delivered')
+      ? 'delivered'
+      : 'partial';
+  }
+
+  private async processJob(job: FreshnessJobRecord): Promise<boolean> {
     const startedAt = now();
     job.status = 'running';
     job.startedAt = startedAt;
@@ -1173,8 +1592,19 @@ export class InMemoryScbsService implements ScbsService {
         const repo = requireById(this.state.repos, job.targetId, 'Repository');
         repo.status = 'scanned';
         repo.lastScannedAt = now();
+        this.emitOutboxEvent({
+          topic: 'repo.scanned',
+          aggregateType: 'repo',
+          aggregateId: repo.id,
+          repoId: repo.id,
+          payload: {
+            lastScannedAt: repo.lastScannedAt,
+          },
+        });
       } else if (job.kind === 'receipt_validation') {
         this.validateReceiptNow(job.targetId);
+      } else if (job.kind === 'webhook_delivery') {
+        await this.processWebhookDelivery(job);
       } else {
         for (const claim of this.state.claims) {
           if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
@@ -1206,6 +1636,29 @@ export class InMemoryScbsService implements ScbsService {
       job.updatedAt = failedAt;
       job.completedAt = undefined;
       job.lastError = error instanceof Error ? error.message : 'Unknown job failure';
+      if (job.kind === 'receipt_validation') {
+        this.recordReceiptReview({
+          receiptId: job.targetId,
+          bundleId: requireById(this.state.receipts, job.targetId, 'Receipt').bundleId,
+          action: 'validation_failed',
+          actor: 'system',
+          note: job.lastError,
+        });
+      }
+      if (job.kind === 'webhook_delivery') {
+        const [eventId, webhookId] = job.targetId.split(':');
+        const event = this.state.outboxEvents.find((entry) => entry.id === eventId);
+        const delivery = event?.deliveries.find((entry) => entry.webhookId === webhookId);
+        if (delivery) {
+          delivery.status = 'failed';
+          delivery.lastError = job.lastError;
+          delivery.lastAttemptAt = failedAt;
+        }
+        if (event) {
+          event.updatedAt = failedAt;
+          event.status = 'failed';
+        }
+      }
       if (job.attempts >= job.maxAttempts) {
         job.status = 'failed';
       } else {

@@ -1,6 +1,12 @@
 import { buildApiIndex, routeManifest } from '../../../apps/server/src/index';
 import type {
+  AccessTokenCreateInput,
+  AccessTokenGrant,
+  AccessTokenRecord,
   ApiSurface,
+  AuditRecord,
+  BundleListEntry,
+  BundleReviewRecord,
   DoctorReport,
   FreshnessEventRecord,
   FreshnessImpact,
@@ -9,7 +15,9 @@ import type {
   FreshnessState,
   FreshnessWorkerReport,
   JobListReport,
+  OutboxEventRecord,
   ReceiptRecord,
+  ReceiptReviewRecord,
   ReceiptSubmitInput,
   RegisterRepoInput,
   RepoChangesInput,
@@ -18,6 +26,8 @@ import type {
   RepoRecord as ServerRepoRecord,
   ServiceCapability,
   StorageSurface,
+  WebhookCreateInput,
+  WebhookRecord,
 } from '../../../apps/server/src/index';
 import type {
   ClaimRecord as ServerClaimRecord,
@@ -63,7 +73,13 @@ export type {
   ViewRecord,
 };
 export type {
+  AccessTokenCreateInput,
+  AccessTokenGrant,
+  AccessTokenRecord,
   ApiSurface,
+  AuditRecord,
+  BundleListEntry,
+  BundleReviewRecord,
   DoctorReport,
   FreshnessEventRecord,
   RegisterRepoInput,
@@ -73,12 +89,16 @@ export type {
   FreshnessState,
   FreshnessWorkerReport,
   JobListReport,
+  OutboxEventRecord,
+  ReceiptReviewRecord,
   ReceiptRecord,
   ReceiptSubmitInput,
   RepoChangesInput,
   ServeReport,
   ServiceCapability,
   StorageSurface,
+  WebhookCreateInput,
+  WebhookRecord,
 };
 export type BundlePlanInput = BundleRequest;
 export type BundleRecord = TaskBundle;
@@ -162,6 +182,17 @@ export interface ApiIndex {
     root: string;
     adminDiagnostics: string;
     listJobs: string;
+    listAdminBundles: string;
+    reviewBundle: string;
+    listReceiptHistory: string;
+    showReceiptHistory: string;
+    listOutboxEvents: string;
+    showOutboxEvent: string;
+    listWebhooks: string;
+    createWebhook: string;
+    listAccessTokens: string;
+    createAccessToken: string;
+    listAuditRecords: string;
     showJob: string;
     retryJob: string;
     runWorker: string;
@@ -198,6 +229,16 @@ export interface ScbsClient {
   admin: {
     diagnostics(): Promise<DoctorReport>;
     jobs(): Promise<JobListReport>;
+    bundles(): Promise<BundleListEntry[]>;
+    reviewBundle(id: string): Promise<BundleReviewRecord>;
+    receiptHistory(id?: string): Promise<ReceiptReviewRecord[]>;
+    outbox(): Promise<OutboxEventRecord[]>;
+    showOutboxEvent(id: string): Promise<OutboxEventRecord>;
+    webhooks(): Promise<WebhookRecord[]>;
+    createWebhook(input: WebhookCreateInput): Promise<WebhookRecord>;
+    accessTokens(): Promise<AccessTokenRecord[]>;
+    createAccessToken(input: AccessTokenCreateInput): Promise<AccessTokenGrant>;
+    audit(): Promise<AuditRecord[]>;
     showJob(id: string): Promise<FreshnessJobRecord>;
     retryJob(id: string): Promise<FreshnessJobRecord>;
     drainWorker(input?: {
@@ -283,6 +324,20 @@ export function createScbsClient(options: ScbsClientOptions): ScbsClient {
     admin: {
       diagnostics: () => request<DoctorReport>('GET', '/admin/diagnostics'),
       jobs: () => request<JobListReport>('GET', '/admin/jobs'),
+      bundles: () => request<BundleListEntry[]>('GET', '/admin/bundles'),
+      reviewBundle: (id) => request<BundleReviewRecord>('GET', '/admin/bundles/:id/review', { id }),
+      receiptHistory: (id) =>
+        id
+          ? request<ReceiptReviewRecord[]>('GET', '/admin/receipts/:id/history', { id })
+          : request<ReceiptReviewRecord[]>('GET', '/admin/receipts/history'),
+      outbox: () => request<OutboxEventRecord[]>('GET', '/admin/outbox'),
+      showOutboxEvent: (id) => request<OutboxEventRecord>('GET', '/admin/outbox/:id', { id }),
+      webhooks: () => request<WebhookRecord[]>('GET', '/admin/webhooks'),
+      createWebhook: (input) => request<WebhookRecord>('POST', '/admin/webhooks', undefined, input),
+      accessTokens: () => request<AccessTokenRecord[]>('GET', '/admin/access-tokens'),
+      createAccessToken: (input) =>
+        request<AccessTokenGrant>('POST', '/admin/access-tokens', undefined, input),
+      audit: () => request<AuditRecord[]>('GET', '/admin/audit'),
       showJob: (id) => request<FreshnessJobRecord>('GET', '/admin/jobs/:id', { id }),
       retryJob: (id) => request<FreshnessJobRecord>('POST', '/admin/jobs/:id/retry', { id }),
       drainWorker: (input) =>
