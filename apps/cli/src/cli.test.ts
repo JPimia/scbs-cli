@@ -376,4 +376,25 @@ describe('CLI parsing', () => {
       'PostgreSQL durable storage initialization failed: connect failed'
     );
   });
+
+  it('does not downgrade config-driven postgres failures to local-json fallback', async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-durable-config-'));
+    await mkdir(path.join(cwd, 'config'), { recursive: true });
+    await writeFile(
+      path.join(cwd, 'config/scbs.config.yaml'),
+      'service:\n  name: scbs\nstorage:\n  adapter: postgres\n  databaseUrl: postgres://configured/scbs\n'
+    );
+
+    const service = new DurableScbsService({ cwd });
+    const pgService = service as unknown as {
+      initializePostgresBackend: () => Promise<never>;
+    };
+    pgService.initializePostgresBackend = async () => {
+      throw new Error('connect failed');
+    };
+
+    await expect(service.serve()).rejects.toThrow(
+      'PostgreSQL durable storage initialization failed: connect failed'
+    );
+  });
 });

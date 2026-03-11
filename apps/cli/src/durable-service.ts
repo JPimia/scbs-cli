@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,6 +107,38 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, '');
 
 const dedupe = (values: string[] | undefined): string[] => [...new Set(values ?? [])];
+
+function parseStorageAdapter(configContents: string): string | undefined {
+  let inStorageSection = false;
+
+  for (const rawLine of configContents.split('\n')) {
+    const trimmed = rawLine.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const topLevelMatch = rawLine.match(/^([A-Za-z0-9_-]+):\s*$/);
+    if (topLevelMatch) {
+      inStorageSection = topLevelMatch[1] === 'storage';
+      continue;
+    }
+
+    if (!inStorageSection) {
+      continue;
+    }
+
+    const adapterMatch = rawLine.match(/^\s+adapter:\s*(\S.*?)\s*$/);
+    if (adapterMatch) {
+      return adapterMatch[1];
+    }
+
+    if (!/^\s/.test(rawLine)) {
+      inStorageSection = false;
+    }
+  }
+
+  return undefined;
+}
 
 function requireById<T extends { id: string }>(collection: T[], id: string, label: string): T {
   const match = collection.find((entry) => entry.id === id);
@@ -980,7 +1012,16 @@ export class DurableScbsService implements ScbsService {
   }
 
   private async shouldRequirePostgres(): Promise<boolean> {
-    return this.explicitDatabaseUrl;
+    if (this.explicitDatabaseUrl) {
+      return true;
+    }
+
+    try {
+      const configContents = await readFile(this.paths.configPath, 'utf8');
+      return parseStorageAdapter(configContents) === 'postgres';
+    } catch {
+      return false;
+    }
   }
 
   private resolveConfigPath(configPath: string): string {
