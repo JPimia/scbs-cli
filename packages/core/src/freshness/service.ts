@@ -1,4 +1,5 @@
 import {
+  type RepoFileChange,
   determineChangeImpact,
   planSelectiveRecompute,
   updateBundleFreshness,
@@ -12,7 +13,7 @@ import type { CoreStore } from '../storage/memory-store';
 export class FreshnessService {
   constructor(private readonly store: CoreStore) {}
 
-  markChanged(changedPaths: string[]): {
+  markChanged(changedPaths: Array<string | RepoFileChange>): {
     claims: ClaimRecord[];
     views: ViewRecord[];
     bundles: TaskBundle[];

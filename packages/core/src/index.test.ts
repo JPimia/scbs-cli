@@ -669,4 +669,134 @@ describe('core services', () => {
     ).toBeTrue();
     expect(bundleResult.bundle.id).toBeTruthy();
   });
+
+  it('marks only the changed repository stale when repos share a relative path', () => {
+    const services = createCoreServices();
+    const repoAlpha = services.repositories.register({ name: 'alpha', rootPath: '/tmp/alpha' });
+    const repoBeta = services.repositories.register({ name: 'beta', rootPath: '/tmp/beta' });
+
+    services.store.facts = [
+      {
+        id: 'fact_alpha',
+        repoId: repoAlpha.id,
+        type: 'file_hash',
+        subjectType: 'file',
+        subjectId: 'file_alpha',
+        value: {},
+        anchors: [{ repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+        versionStamp: 'hash-alpha',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'fact_beta',
+        repoId: repoBeta.id,
+        type: 'file_hash',
+        subjectType: 'file',
+        subjectId: 'file_beta',
+        value: {},
+        anchors: [{ repoId: repoBeta.id, filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+        versionStamp: 'hash-beta',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.claims = [
+      {
+        id: 'claim_alpha',
+        repoId: repoAlpha.id,
+        text: 'alpha shared implementation',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_alpha'],
+        anchors: [{ repoId: repoAlpha.id, filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/shared.ts'],
+        metadata: { filePath: 'src/shared.ts', symbolName: 'shared' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_beta',
+        repoId: repoBeta.id,
+        text: 'beta shared implementation',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_beta'],
+        anchors: [{ repoId: repoBeta.id, filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/shared.ts'],
+        metadata: { filePath: 'src/shared.ts', symbolName: 'shared' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_alpha',
+        repoId: repoAlpha.id,
+        type: 'file_scope',
+        key: `${repoAlpha.id}:src/shared.ts`,
+        title: 'Alpha shared scope',
+        summary: 'alpha shared implementation',
+        claimIds: ['claim_alpha'],
+        fileScope: ['src/shared.ts'],
+        symbolScope: ['shared'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_beta',
+        repoId: repoBeta.id,
+        type: 'file_scope',
+        key: `${repoBeta.id}:src/shared.ts`,
+        title: 'Beta shared scope',
+        summary: 'beta shared implementation',
+        claimIds: ['claim_beta'],
+        fileScope: ['src/shared.ts'],
+        symbolScope: ['shared'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const alphaBundle = planBundle(services, {
+      id: 'req_alpha',
+      taskTitle: 'Inspect alpha',
+      repoIds: [repoAlpha.id],
+      fileScope: ['src/shared.ts'],
+      constraints: { includeProofHandles: true },
+    });
+    const betaBundle = planBundle(services, {
+      id: 'req_beta',
+      taskTitle: 'Inspect beta',
+      repoIds: [repoBeta.id],
+      fileScope: ['src/shared.ts'],
+      constraints: { includeProofHandles: true },
+    });
+
+    const freshness = services.freshness.markChanged([
+      { repoId: repoBeta.id, filePath: 'src/shared.ts' },
+    ]);
+
+    expect(alphaBundle.bundle.id).toBeTruthy();
+    expect(betaBundle.bundle.id).toBeTruthy();
+    expect(freshness.claims.find((claim) => claim.id === 'claim_alpha')?.freshness).toBe('fresh');
+    expect(freshness.claims.find((claim) => claim.id === 'claim_beta')?.freshness).toBe('stale');
+    expect(freshness.views.find((view) => view.id === 'view_alpha')?.freshness).toBe('fresh');
+    expect(freshness.views.find((view) => view.id === 'view_beta')?.freshness).toBe('stale');
+    expect(freshness.bundles.find((bundle) => bundle.id === alphaBundle.bundle.id)?.freshness).toBe(
+      'fresh'
+    );
+    expect(freshness.bundles.find((bundle) => bundle.id === betaBundle.bundle.id)?.freshness).toBe(
+      'expired'
+    );
+    expect(freshness.recompute.expireBundleIds).toEqual([betaBundle.bundle.id]);
+  });
 });

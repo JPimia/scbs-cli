@@ -1,6 +1,12 @@
 import type { ClaimRecord, FactRecord, TaskBundle, ViewRecord } from '../../protocol/src/index';
 
+export interface RepoFileChange {
+  filePath: string;
+  repoId?: string;
+}
+
 export interface ChangeImpact {
+  changedFiles: RepoFileChange[];
   changedPaths: string[];
   staleFactIds: string[];
   staleClaimIds: string[];
@@ -12,12 +18,33 @@ function normalizePath(filePath: string): string {
   return filePath.replaceAll('\\', '/');
 }
 
-function matchesChangedPath(candidate: string | undefined, changed: Set<string>): boolean {
+function normalizeChange(change: string | RepoFileChange): RepoFileChange {
+  if (typeof change === 'string') {
+    return { filePath: normalizePath(change) };
+  }
+  return {
+    ...change,
+    filePath: normalizePath(change.filePath),
+  };
+}
+
+function matchesChangedPath(
+  candidate: string | undefined,
+  repoId: string | undefined,
+  changedFiles: RepoFileChange[]
+): boolean {
   if (!candidate) {
     return false;
   }
   const normalized = normalizePath(candidate);
-  for (const changedPath of changed) {
+  for (const changed of changedFiles) {
+    if (changed.repoId && repoId && changed.repoId !== repoId) {
+      continue;
+    }
+    if (changed.repoId && !repoId) {
+      continue;
+    }
+    const changedPath = changed.filePath;
     if (
       normalized === changedPath ||
       normalized.startsWith(`${changedPath}/`) ||
@@ -30,40 +57,49 @@ function matchesChangedPath(candidate: string | undefined, changed: Set<string>)
 }
 
 export function determineChangeImpact(
-  changedPaths: string[],
+  changedPaths: Array<string | RepoFileChange>,
   facts: FactRecord[],
   claims: ClaimRecord[],
   views: ViewRecord[],
   bundles: TaskBundle[]
 ): ChangeImpact {
-  const changed = new Set(changedPaths.map(normalizePath));
+  const changedFiles = changedPaths.map(normalizeChange);
   const staleFacts = facts.filter((fact) =>
-    fact.anchors.some((anchor) => matchesChangedPath(anchor.filePath, changed))
+    fact.anchors.some((anchor) => matchesChangedPath(anchor.filePath, anchor.repoId, changedFiles))
   );
   const staleFactIds = new Set(staleFacts.map((fact) => fact.id));
   const staleClaims = claims.filter(
     (claim) =>
-      claim.anchors.some((anchor) => matchesChangedPath(anchor.filePath, changed)) ||
-      claim.invalidationKeys.some((key) => matchesChangedPath(key, changed)) ||
+      claim.anchors.some((anchor) =>
+        matchesChangedPath(anchor.filePath, anchor.repoId, changedFiles)
+      ) ||
+      claim.invalidationKeys.some((key) => matchesChangedPath(key, claim.repoId, changedFiles)) ||
       claim.factIds.some((factId) => staleFactIds.has(factId))
   );
   const staleClaimIds = new Set(staleClaims.map((claim) => claim.id));
   const staleViews = views.filter(
     (view) =>
       view.claimIds.some((claimId) => staleClaimIds.has(claimId)) ||
-      (view.fileScope ?? []).some((filePath) => matchesChangedPath(filePath, changed))
+      (view.fileScope ?? []).some((filePath) =>
+        matchesChangedPath(filePath, view.repoId, changedFiles)
+      )
   );
   const staleViewIds = new Set(staleViews.map((view) => view.id));
   const expiredBundles = bundles.filter(
     (bundle) =>
       bundle.selectedClaimIds.some((claimId) => staleClaimIds.has(claimId)) ||
       bundle.selectedViewIds.some((viewId) => staleViewIds.has(viewId)) ||
-      bundle.fileScope.some((filePath) => matchesChangedPath(filePath, changed)) ||
-      bundle.proofHandles.some((anchor) => matchesChangedPath(anchor.filePath, changed))
+      bundle.fileScope.some((filePath) =>
+        bundle.repoIds.some((repoId) => matchesChangedPath(filePath, repoId, changedFiles))
+      ) ||
+      bundle.proofHandles.some((anchor) =>
+        matchesChangedPath(anchor.filePath, anchor.repoId, changedFiles)
+      )
   );
 
   return {
-    changedPaths,
+    changedFiles,
+    changedPaths: changedFiles.map((change) => change.filePath),
     staleFactIds: [...staleFactIds],
     staleClaimIds: [...staleClaimIds],
     staleViewIds: [...staleViewIds],
