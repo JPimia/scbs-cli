@@ -5,6 +5,7 @@ import { type IncomingMessage, type ServerResponse, createServer } from 'node:ht
 import { runCli } from './cli';
 import { createDurableScbsService } from './durable-service';
 import { printValue, toJson } from './format';
+import { handleApiRequest } from './http';
 import type { ScbsService } from './service';
 import type { ServeReport } from './types';
 
@@ -60,34 +61,7 @@ async function handleRequest(
   service: ScbsService,
   report: ServeReport
 ): Promise<void> {
-  const method = request.method ?? 'GET';
-  const url = request.url ?? '/';
-
-  if (method === 'GET' && url === '/health') {
-    return writeJson(response, 200, await service.health());
-  }
-
-  if (method === 'GET' && (url === '/api/v1' || url === '/api/v1/')) {
-    return writeJson(response, 200, {
-      service: report.service,
-      status: report.status,
-      api: report.api,
-      endpoints: {
-        health: '/health',
-        root: '/api/v1',
-      },
-    });
-  }
-
-  writeJson(response, 404, {
-    error: 'Not Found',
-    message: `No route for ${method} ${url}`,
-  });
-}
-
-function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body, null, 2));
+  return handleApiRequest(request, response, service, report);
 }
 
 async function listen(server: ReturnType<typeof createServer>, report: ServeReport): Promise<void> {
