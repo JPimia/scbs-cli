@@ -184,6 +184,13 @@ describe('CLI happy path', () => {
 
   it('starts a reachable HTTP surface for the real serve entrypoint', async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-serve-'));
+    const setupService = createDurableScbsService({ cwd });
+    const repo = await setupService.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
+    const bundle = await setupService.planBundle({
+      repoId: repo.id,
+      task: 'bootstrap context',
+    });
+    await setupService.expireBundle(bundle.id);
     const entrypoint = new URL('./index.ts', import.meta.url);
     const repoRoot = path.resolve(path.dirname(entrypoint.pathname), '../../..');
     const child = spawn('bun', ['run', entrypoint.pathname, 'serve', '--json'], {
@@ -231,7 +238,183 @@ describe('CLI happy path', () => {
       endpoints: {
         health: '/health',
         root: '/api/v1',
+        planBundle: '/api/v1/bundles/plan',
+        showBundle: '/api/v1/bundles/:id',
+        bundleFreshness: '/api/v1/bundles/:id/freshness',
+        freshnessImpacts: '/api/v1/freshness/impacts',
+        freshnessStatus: '/api/v1/freshness/status',
+        recomputeFreshness: '/api/v1/freshness/recompute',
+        createReceipt: '/api/v1/receipts',
+        listReceipts: '/api/v1/receipts',
+        showReceipt: '/api/v1/receipts/:id',
       },
+    });
+
+    const bundleResponse = await requestJson(`http://127.0.0.1:8791/api/v1/bundles/${bundle.id}`);
+    expect(bundleResponse.status).toBe(200);
+    expect(bundleResponse.body).toMatchObject({
+      id: bundle.id,
+      repoIds: [repo.id],
+      task: 'bootstrap context',
+      freshness: 'expired',
+    });
+
+    const malformedBundleResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/bundles/%E0%A4%A'
+    );
+    expect(malformedBundleResponse.status).toBe(400);
+    expect(malformedBundleResponse.body).toMatchObject({
+      error: 'Bad Request',
+      message: 'Route parameter contains invalid percent-encoding.',
+    });
+
+    const bundleFreshnessResponse = await requestJson(
+      `http://127.0.0.1:8791/api/v1/bundles/${bundle.id}/freshness`
+    );
+    expect(bundleFreshnessResponse.status).toBe(200);
+    expect(bundleFreshnessResponse.body).toMatchObject({
+      bundleId: bundle.id,
+      freshness: 'expired',
+    });
+
+    const freshnessImpactsResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/freshness/impacts'
+    );
+    expect(freshnessImpactsResponse.status).toBe(200);
+    expect(freshnessImpactsResponse.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artifactType: 'bundle',
+          artifactId: bundle.id,
+          state: 'expired',
+        }),
+      ])
+    );
+
+    const freshnessStatusBefore = await requestJson(
+      'http://127.0.0.1:8791/api/v1/freshness/status'
+    );
+    expect(freshnessStatusBefore.status).toBe(200);
+    expect(freshnessStatusBefore.body).toMatchObject({
+      overall: 'partial',
+      staleArtifacts: 1,
+    });
+
+    const recomputeResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/freshness/recompute',
+      {
+        method: 'POST',
+      }
+    );
+    expect(recomputeResponse.status).toBe(200);
+    expect(recomputeResponse.body).toMatchObject({
+      updated: 1,
+    });
+
+    const freshnessStatusAfter = await requestJson('http://127.0.0.1:8791/api/v1/freshness/status');
+    expect(freshnessStatusAfter.status).toBe(200);
+    expect(freshnessStatusAfter.body).toMatchObject({
+      overall: 'fresh',
+      staleArtifacts: 0,
+    });
+
+    const createdBundleResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
+      method: 'POST',
+      body: { task: 'ship api', repo: repo.id },
+    });
+    expect(createdBundleResponse.status).toBe(201);
+    expect(createdBundleResponse.body).toMatchObject({
+      id: 'bundle_ship-api',
+      repoIds: [repo.id],
+      task: 'ship api',
+      freshness: 'fresh',
+    });
+
+    const createdReceiptResponse = await requestJson('http://127.0.0.1:8791/api/v1/receipts', {
+      method: 'POST',
+      body: { bundle: bundle.id, agent: 'agent-1', summary: 'submitted proof' },
+    });
+    expect(createdReceiptResponse.status).toBe(201);
+    expect(createdReceiptResponse.body).toMatchObject({
+      id: 'receipt_agent-1-submitted-proof',
+      bundleId: bundle.id,
+      agent: 'agent-1',
+      summary: 'submitted proof',
+      status: 'pending',
+    });
+
+    const receiptsResponse = await requestJson('http://127.0.0.1:8791/api/v1/receipts');
+    expect(receiptsResponse.status).toBe(200);
+    expect(receiptsResponse.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'receipt_agent-1-submitted-proof',
+          bundleId: bundle.id,
+        }),
+      ])
+    );
+
+    const receiptResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/receipts/receipt_agent-1-submitted-proof'
+    );
+    expect(receiptResponse.status).toBe(200);
+    expect(receiptResponse.body).toMatchObject({
+      id: 'receipt_agent-1-submitted-proof',
+      agent: 'agent-1',
+      summary: 'submitted proof',
+    });
+
+    const invalidJsonResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
+      method: 'POST',
+      rawBody: '{bad json',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(invalidJsonResponse.status).toBe(400);
+    expect(invalidJsonResponse.body).toMatchObject({
+      error: 'Bad Request',
+      message: 'Request body must be valid JSON.',
+    });
+
+    const missingBundleFieldsResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/bundles/plan',
+      {
+        method: 'POST',
+        body: { repo: repo.id },
+      }
+    );
+    expect(missingBundleFieldsResponse.status).toBe(400);
+    expect(missingBundleFieldsResponse.body).toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "task".',
+    });
+
+    const missingReceiptFieldsResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/receipts',
+      {
+        method: 'POST',
+        body: { summary: 'missing agent' },
+      }
+    );
+    expect(missingReceiptFieldsResponse.status).toBe(400);
+    expect(missingReceiptFieldsResponse.body).toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "agent".',
+    });
+
+    const methodMismatchResponse = await requestJson('http://127.0.0.1:8791/api/v1/receipts', {
+      method: 'DELETE',
+    });
+    expect(methodMismatchResponse.status).toBe(405);
+    expect(methodMismatchResponse.body).toMatchObject({
+      error: 'Method Not Allowed',
+      message: 'No route for DELETE /api/v1/receipts',
+    });
+
+    const unknownRouteResponse = await requestJson('http://127.0.0.1:8791/api/v1/nope');
+    expect(unknownRouteResponse.status).toBe(404);
+    expect(unknownRouteResponse.body).toMatchObject({
+      error: 'Not Found',
+      message: 'No route for GET /api/v1/nope',
     });
   });
 });
@@ -276,16 +459,49 @@ async function waitForServeOutput(child: ReturnType<typeof spawn>): Promise<stri
 }
 
 async function waitForJson(url: string): Promise<unknown> {
+  const response = await requestJson(url);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Unexpected status ${response.status}`);
+  }
+
+  return response.body;
+}
+
+async function requestJson(
+  url: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    rawBody?: string;
+    headers?: Record<string, string>;
+  } = {}
+): Promise<{ status: number; body: unknown }> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Unexpected status ${response.status}`);
+      const headers = new Headers(options.headers);
+      let body: string | undefined;
+
+      if (options.rawBody !== undefined) {
+        body = options.rawBody;
+      } else if (options.body !== undefined) {
+        body = JSON.stringify(options.body);
+        if (!headers.has('content-type')) {
+          headers.set('content-type', 'application/json');
+        }
       }
 
-      return await response.json();
+      const response = await fetch(url, {
+        method: options.method,
+        headers,
+        body,
+      });
+
+      return {
+        status: response.status,
+        body: await response.json(),
+      };
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, 100));
