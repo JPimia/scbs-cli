@@ -583,6 +583,70 @@ describe('CLI happy path', () => {
       summary: 'submitted proof',
     });
 
+    const validateReceiptResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/receipts/receipt_agent-1-submitted-proof/validate',
+      {
+        method: 'POST',
+      }
+    );
+    expect(validateReceiptResponse.status).toBe(200);
+    expect(validateReceiptResponse.body).toMatchObject({
+      id: 'receipt_agent-1-submitted-proof',
+      status: 'validated',
+    });
+
+    const persistedService = createDurableScbsService({ cwd });
+    const claimsAfterValidation = await persistedService.listClaims();
+    expect(claimsAfterValidation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'claim_from_receipt_agent-1-submitted-proof',
+          repoId: repo.id,
+          statement: 'submitted proof',
+          freshness: 'partial',
+          metadata: expect.objectContaining({
+            claimKind: 'validated_receipt',
+            receiptId: 'receipt_agent-1-submitted-proof',
+          }),
+          invalidationKeys: ['.'],
+        }),
+      ])
+    );
+
+    const viewsAfterValidation = await persistedService.listViews();
+    expect(viewsAfterValidation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repoId: repo.id,
+          claimIds: expect.arrayContaining(['claim_from_receipt_agent-1-submitted-proof']),
+          freshness: 'partial',
+          name: '.',
+          fileScope: ['.'],
+        }),
+      ])
+    );
+
+    const rejectedReceiptResponse = await requestJson('http://127.0.0.1:8791/api/v1/receipts', {
+      method: 'POST',
+      body: { bundle: bundle.id, agent: 'agent-2', summary: 'failed proof' },
+    });
+    expect(rejectedReceiptResponse.status).toBe(201);
+    expect(rejectedReceiptResponse.body).toMatchObject({
+      id: 'receipt_agent-2-failed-proof',
+      status: 'pending',
+    });
+
+    const rejectReceiptResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/receipts/receipt_agent-2-failed-proof/reject',
+      {
+        method: 'POST',
+      }
+    );
+    expect(rejectReceiptResponse.status).toBe(200);
+    expect(rejectReceiptResponse.body).toMatchObject({
+      id: 'receipt_agent-2-failed-proof',
+      status: 'rejected',
+    });
     const invalidJsonResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
       rawBody: '{bad json',

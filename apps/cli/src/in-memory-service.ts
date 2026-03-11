@@ -1,3 +1,11 @@
+import { deriveViews } from '../../../packages/core/src/views/service';
+import type {
+  AgentReceipt,
+  ClaimRecord as ProtocolClaimRecord,
+  ViewRecord as ProtocolViewRecord,
+  SourceAnchor,
+} from '../../../packages/protocol/src/index';
+import { validateReceipt as validateStoredReceipt } from '../../../packages/receipts/src/validation';
 import type {
   BundlePlanInput,
   ReceiptSubmitInput,
@@ -73,6 +81,127 @@ const rollupFreshness = (states: FreshnessState[]): FreshnessState => {
 
   return 'fresh';
 };
+
+type DurableReceiptRecord = ReceiptRecord &
+  Partial<
+    Pick<AgentReceipt, 'repoIds' | 'type' | 'fromRole' | 'payload' | 'createdAt' | 'updatedAt'>
+  >;
+
+type DurableClaimRecord = ClaimRecord &
+  Partial<
+    Pick<
+      ProtocolClaimRecord,
+      | 'text'
+      | 'type'
+      | 'confidence'
+      | 'trustTier'
+      | 'anchors'
+      | 'invalidationKeys'
+      | 'metadata'
+      | 'createdAt'
+      | 'updatedAt'
+    >
+  >;
+
+type DurableViewRecord = ViewRecord &
+  Partial<
+    Pick<
+      ProtocolViewRecord,
+      | 'type'
+      | 'key'
+      | 'title'
+      | 'summary'
+      | 'fileScope'
+      | 'symbolScope'
+      | 'metadata'
+      | 'createdAt'
+      | 'updatedAt'
+    >
+  >;
+
+const toProtocolReceiptStatus = (status: ReceiptRecord['status']): AgentReceipt['status'] =>
+  status === 'pending' ? 'provisional' : status;
+
+const toDurableReceiptStatus = (status: AgentReceipt['status']): ReceiptRecord['status'] =>
+  status === 'provisional' ? 'pending' : status;
+
+const buildDefaultAnchor = (repoId: string, filePath: string): SourceAnchor => ({
+  repoId,
+  filePath,
+  fileHash: `in-memory:${repoId}:${filePath}`,
+});
+
+const toProtocolClaim = (claim: DurableClaimRecord): ProtocolClaimRecord => {
+  const metadata =
+    claim.metadata && typeof claim.metadata === 'object'
+      ? { ...claim.metadata }
+      : ({} as Record<string, unknown>);
+  const filePath =
+    typeof metadata.filePath === 'string' && metadata.filePath.length > 0 ? metadata.filePath : '.';
+  const anchors =
+    Array.isArray(claim.anchors) && claim.anchors.length > 0
+      ? claim.anchors
+      : [buildDefaultAnchor(claim.repoId, filePath)];
+  const invalidationKeys =
+    Array.isArray(claim.invalidationKeys) && claim.invalidationKeys.length > 0
+      ? claim.invalidationKeys
+      : [filePath];
+
+  return {
+    id: claim.id,
+    repoId: claim.repoId,
+    text: claim.text ?? claim.statement,
+    type: claim.type ?? 'provisional',
+    confidence: claim.confidence ?? 0.6,
+    trustTier: claim.trustTier ?? 'provisional',
+    factIds: claim.factIds,
+    anchors,
+    freshness: claim.freshness,
+    invalidationKeys,
+    metadata: {
+      ...metadata,
+      filePath,
+    },
+    createdAt: claim.createdAt ?? now(),
+    updatedAt: claim.updatedAt ?? now(),
+  };
+};
+
+const toDurableClaim = (claim: ProtocolClaimRecord): DurableClaimRecord =>
+  ({
+    id: claim.id,
+    repoId: claim.repoId,
+    statement: claim.text,
+    factIds: claim.factIds,
+    freshness: claim.freshness,
+    text: claim.text,
+    type: claim.type,
+    confidence: claim.confidence,
+    trustTier: claim.trustTier,
+    anchors: claim.anchors,
+    invalidationKeys: claim.invalidationKeys,
+    metadata: claim.metadata,
+    createdAt: claim.createdAt,
+    updatedAt: claim.updatedAt,
+  }) as DurableClaimRecord;
+
+const toDurableView = (view: ProtocolViewRecord): DurableViewRecord =>
+  ({
+    id: view.id,
+    repoId: view.repoId,
+    name: view.title,
+    claimIds: view.claimIds,
+    freshness: view.freshness,
+    type: view.type,
+    key: view.key,
+    title: view.title,
+    summary: view.summary,
+    fileScope: view.fileScope,
+    symbolScope: view.symbolScope,
+    metadata: view.metadata,
+    createdAt: view.createdAt,
+    updatedAt: view.updatedAt,
+  }) as DurableViewRecord;
 
 export const createSeedState = (): SeedState => {
   const repoId = 'repo_local-default';
@@ -424,16 +553,27 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async submitReceipt(input: ReceiptSubmitInput) {
-    const receipt: ReceiptRecord = {
+    const createdAt = now();
+    const bundle =
+      input.bundleId === null
+        ? undefined
+        : requireById(this.state.bundles, input.bundleId, 'Bundle');
+    const receipt: DurableReceiptRecord = {
       id: `receipt_${slugify(`${input.agent}-${input.summary}`)}`,
       bundleId: input.bundleId,
       agent: input.agent,
       summary: input.summary,
       status: 'pending',
+      repoIds: bundle?.repoIds ?? [],
+      type: 'workflow_note',
+      fromRole: 'agent',
+      payload: {},
+      createdAt,
+      updatedAt: createdAt,
     };
 
-    this.state.receipts.push(receipt);
-    return receipt;
+    this.state.receipts.push(receipt as ReceiptRecord);
+    return receipt as ReceiptRecord;
   }
 
   public async listReceipts() {
@@ -445,9 +585,30 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async validateReceipt(id: string) {
-    const receipt = requireById(this.state.receipts, id, 'Receipt');
-    receipt.status = 'validated';
-    return receipt;
+    const receipt = requireById(this.state.receipts, id, 'Receipt') as DurableReceiptRecord;
+    const bundle =
+      receipt.bundleId === null
+        ? undefined
+        : requireById(this.state.bundles, receipt.bundleId, 'Bundle');
+    const decision = validateStoredReceipt(
+      this.toProtocolReceipt(receipt, bundle),
+      this.buildValidationAnchors(receipt, bundle)
+    );
+    const validatedReceipt = this.toDurableReceipt(decision.receipt, receipt);
+
+    this.state.receipts = this.state.receipts.map((entry) =>
+      entry.id === id ? (validatedReceipt as ReceiptRecord) : entry
+    );
+
+    if (decision.promotedClaim) {
+      const promotedClaim = toDurableClaim(decision.promotedClaim);
+      this.state.claims = this.state.claims
+        .filter((entry) => entry.id !== promotedClaim.id)
+        .concat(promotedClaim as ClaimRecord);
+      this.rebuildViewsForRepo(promotedClaim.repoId);
+    }
+
+    return validatedReceipt as ReceiptRecord;
   }
 
   public async rejectReceipt(id: string) {
@@ -479,6 +640,87 @@ export class InMemoryScbsService implements ScbsService {
     }
 
     return bundle;
+  }
+
+  private toProtocolReceipt(receipt: DurableReceiptRecord, bundle?: BundleRecord): AgentReceipt {
+    const createdAt = receipt.createdAt ?? now();
+    const updatedAt = receipt.updatedAt ?? createdAt;
+
+    return {
+      id: receipt.id,
+      bundleId: receipt.bundleId ?? undefined,
+      repoIds: Array.isArray(receipt.repoIds) ? receipt.repoIds : (bundle?.repoIds ?? []),
+      type: receipt.type ?? 'workflow_note',
+      fromRole: receipt.fromRole ?? 'agent',
+      summary: receipt.summary,
+      payload: receipt.payload && typeof receipt.payload === 'object' ? { ...receipt.payload } : {},
+      status: toProtocolReceiptStatus(receipt.status),
+      createdAt,
+      updatedAt,
+    };
+  }
+
+  private toDurableReceipt(
+    receipt: AgentReceipt,
+    previous: DurableReceiptRecord
+  ): DurableReceiptRecord {
+    return {
+      id: receipt.id,
+      bundleId: receipt.bundleId ?? previous.bundleId ?? null,
+      agent: previous.agent,
+      summary: receipt.summary,
+      status: toDurableReceiptStatus(receipt.status),
+      repoIds: receipt.repoIds,
+      type: receipt.type,
+      fromRole: receipt.fromRole,
+      payload: receipt.payload,
+      createdAt: receipt.createdAt,
+      updatedAt: receipt.updatedAt,
+    };
+  }
+
+  private buildValidationAnchors(
+    receipt: DurableReceiptRecord,
+    bundle?: BundleRecord
+  ): SourceAnchor[] {
+    const existingValidation = receipt.payload?.validation as
+      | { anchors?: SourceAnchor[] }
+      | undefined;
+    if (
+      existingValidation &&
+      typeof existingValidation === 'object' &&
+      Array.isArray(existingValidation.anchors) &&
+      existingValidation.anchors.length > 0
+    ) {
+      return existingValidation.anchors as SourceAnchor[];
+    }
+
+    const repoIds = Array.isArray(receipt.repoIds)
+      ? receipt.repoIds
+      : (bundle?.repoIds ?? []).length > 0
+        ? (bundle?.repoIds ?? [])
+        : [this.state.repos[0]?.id ?? 'repo_local-default'];
+    const filePaths = dedupe([
+      ...(bundle?.fileScope ?? []),
+      ...this.state.views
+        .filter((view) => repoIds.includes(view.repoId))
+        .flatMap((view) =>
+          'fileScope' in view && Array.isArray(view.fileScope) ? view.fileScope : []
+        ),
+    ]);
+    const defaultFilePath = filePaths[0] ?? '.';
+
+    return repoIds.map((repoId) => buildDefaultAnchor(repoId, defaultFilePath));
+  }
+
+  private rebuildViewsForRepo(repoId: string): void {
+    const protocolClaims = this.state.claims.map((claim) =>
+      toProtocolClaim(claim as DurableClaimRecord)
+    );
+    const repoViews = deriveViews(repoId, protocolClaims).map((view) => toDurableView(view));
+    this.state.views = this.state.views
+      .filter((view) => view.repoId !== repoId)
+      .concat(repoViews as ViewRecord[]);
   }
 }
 

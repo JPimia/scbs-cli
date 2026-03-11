@@ -59,6 +59,16 @@ const routeDefinitions: RouteDefinition[] = [
   },
   {
     method: 'GET',
+    pattern: '/api/v1/bundles/cache',
+    handler: async ({ service }) => ({ body: await service.listBundleCache() }),
+  },
+  {
+    method: 'POST',
+    pattern: '/api/v1/bundles/cache/clear',
+    handler: async ({ service }) => ({ body: await service.clearBundleCache() }),
+  },
+  {
+    method: 'GET',
     pattern: '/api/v1/bundles/:id',
     handler: async ({ params, service }) => ({
       body: await service.showBundle(getRequiredParam(params, 'id')),
@@ -69,6 +79,13 @@ const routeDefinitions: RouteDefinition[] = [
     pattern: '/api/v1/bundles/:id/freshness',
     handler: async ({ params, service }) => ({
       body: await service.getBundleFreshness(getRequiredParam(params, 'id')),
+    }),
+  },
+  {
+    method: 'POST',
+    pattern: '/api/v1/bundles/:id/expire',
+    handler: async ({ params, service }) => ({
+      body: await service.expireBundle(getRequiredParam(params, 'id')),
     }),
   },
   {
@@ -110,6 +127,20 @@ const routeDefinitions: RouteDefinition[] = [
     pattern: '/api/v1/receipts/:id',
     handler: async ({ params, service }) => ({
       body: await service.showReceipt(getRequiredParam(params, 'id')),
+    }),
+  },
+  {
+    method: 'POST',
+    pattern: '/api/v1/receipts/:id/validate',
+    handler: async ({ params, service }) => ({
+      body: await service.validateReceipt(getRequiredParam(params, 'id')),
+    }),
+  },
+  {
+    method: 'POST',
+    pattern: '/api/v1/receipts/:id/reject',
+    handler: async ({ params, service }) => ({
+      body: await service.rejectReceipt(getRequiredParam(params, 'id')),
     }),
   },
 ];
@@ -174,12 +205,17 @@ function buildApiIndex(report: ServeReport) {
       planBundle: '/api/v1/bundles/plan',
       showBundle: '/api/v1/bundles/:id',
       bundleFreshness: '/api/v1/bundles/:id/freshness',
+      expireBundle: '/api/v1/bundles/:id/expire',
+      listBundleCache: '/api/v1/bundles/cache',
+      clearBundleCache: '/api/v1/bundles/cache/clear',
       freshnessImpacts: '/api/v1/freshness/impacts',
       freshnessStatus: '/api/v1/freshness/status',
       recomputeFreshness: '/api/v1/freshness/recompute',
       createReceipt: '/api/v1/receipts',
       listReceipts: '/api/v1/receipts',
       showReceipt: '/api/v1/receipts/:id',
+      validateReceipt: '/api/v1/receipts/:id/validate',
+      rejectReceipt: '/api/v1/receipts/:id/reject',
     },
   };
 }
