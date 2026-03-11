@@ -80,12 +80,12 @@ export class DurableScbsService implements ScbsService {
     await this.ensureState();
     return {
       service: 'scbs',
-      status: 'ready' as const,
+      status: 'listening' as const,
       api: {
         kind: 'local-durable' as const,
         baseUrl: this.getBaseUrl(),
         apiVersion: API_VERSION,
-        mode: 'dry-run' as const,
+        mode: 'live' as const,
         capabilities: createApiCapabilities(),
       },
       storage: {
@@ -117,7 +117,7 @@ export class DurableScbsService implements ScbsService {
         kind: 'local-durable' as const,
         baseUrl: this.getBaseUrl(),
         apiVersion: API_VERSION,
-        mode: 'dry-run' as const,
+        mode: 'live' as const,
         capabilities: createApiCapabilities(),
       },
       storage: {
@@ -142,7 +142,7 @@ export class DurableScbsService implements ScbsService {
         {
           name: 'api',
           status: 'ok' as const,
-          detail: `Dry-run API boundary advertised at ${this.getBaseUrl()} (${API_VERSION}).`,
+          detail: `HTTP API boundary is configured at ${this.getBaseUrl()} (${API_VERSION}).`,
         },
         {
           name: 'capabilities',

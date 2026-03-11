@@ -126,7 +126,7 @@ const createInMemoryApi = (): ApiSurface => ({
   kind: 'local-durable',
   baseUrl: defaultEndpoint,
   apiVersion: 'v1',
-  mode: 'dry-run',
+  mode: 'live',
   capabilities: createApiCapabilities(),
 });
 
@@ -151,7 +151,7 @@ export class InMemoryScbsService implements ScbsService {
   public async serve(): Promise<ServeReport> {
     return {
       service: 'scbs',
-      status: 'ready',
+      status: 'listening',
       api: createInMemoryApi(),
       storage: {
         adapter: 'local-json',
@@ -192,7 +192,7 @@ export class InMemoryScbsService implements ScbsService {
         {
           name: 'api',
           status: 'ok',
-          detail: `Dry-run API surface advertised at ${defaultEndpoint} with version v1.`,
+          detail: `HTTP API surface is served at ${defaultEndpoint} with version v1.`,
         },
       ],
     };

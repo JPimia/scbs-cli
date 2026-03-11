@@ -15,7 +15,7 @@ export interface ApiSurface {
   kind: 'local-durable';
   baseUrl: string;
   apiVersion: 'v1';
-  mode: 'dry-run';
+  mode: 'dry-run' | 'live';
   capabilities: ServiceCapability[];
 }
 
@@ -37,7 +37,7 @@ export interface InitReport {
 
 export interface ServeReport {
   service: string;
-  status: 'ready';
+  status: 'ready' | 'listening';
   api: ApiSurface;
   storage: StorageSurface;
 }

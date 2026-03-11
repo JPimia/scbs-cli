@@ -1,9 +1,29 @@
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { runCli } from './cli';
 import { createDurableScbsService } from './durable-service';
+
+const childProcesses: Array<ReturnType<typeof spawn>> = [];
+
+afterEach(async () => {
+  await Promise.all(
+    childProcesses.splice(0).map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null) {
+            resolve();
+            return;
+          }
+
+          child.once('exit', () => resolve());
+          child.kill('SIGTERM');
+        })
+    )
+  );
+});
 
 describe('CLI happy path', () => {
   it('reports the local durable surface through init, serve, doctor, and migrate', async () => {
@@ -42,11 +62,11 @@ describe('CLI happy path', () => {
     expect(JSON.parse(serve.stdout)).toMatchObject({
       data: {
         service: 'scbs',
-        status: 'ready',
+        status: 'listening',
         api: {
           baseUrl: 'http://127.0.0.1:8791',
           apiVersion: 'v1',
-          mode: 'dry-run',
+          mode: 'live',
         },
         storage: {
           adapter: 'local-json',
@@ -161,4 +181,116 @@ describe('CLI happy path', () => {
       'repo_local-default'
     );
   });
+
+  it('starts a reachable HTTP surface for the real serve entrypoint', async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-serve-'));
+    const entrypoint = new URL('./index.ts', import.meta.url);
+    const repoRoot = path.resolve(path.dirname(entrypoint.pathname), '../../..');
+    const child = spawn('bun', ['run', entrypoint.pathname, 'serve', '--json'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        SCBS_CWD: cwd,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    childProcesses.push(child);
+
+    const stdout = await waitForServeOutput(child);
+    const report = JSON.parse(stdout);
+
+    expect(report).toMatchObject({
+      ok: true,
+      command: 'serve',
+      data: {
+        service: 'scbs',
+        status: 'listening',
+        api: {
+          baseUrl: 'http://127.0.0.1:8791',
+          apiVersion: 'v1',
+          mode: 'live',
+        },
+      },
+    });
+
+    const healthResponse = await waitForJson('http://127.0.0.1:8791/health');
+    expect(healthResponse).toMatchObject({
+      status: 'ok',
+      service: 'scbs',
+      version: '0.1.0',
+    });
+
+    const apiRootResponse = await waitForJson('http://127.0.0.1:8791/api/v1');
+    expect(apiRootResponse).toMatchObject({
+      service: 'scbs',
+      status: 'listening',
+      api: {
+        apiVersion: 'v1',
+        mode: 'live',
+      },
+      endpoints: {
+        health: '/health',
+        root: '/api/v1',
+      },
+    });
+  });
 });
+
+async function waitForServeOutput(child: ReturnType<typeof spawn>): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    const stdoutStream = child.stdout;
+    const stderrStream = child.stderr;
+
+    if (!stdoutStream || !stderrStream) {
+      reject(new Error('Serve process did not expose stdout/stderr pipes.'));
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for serve output. stderr: ${stderr}`));
+    }, 10_000);
+
+    stdoutStream.setEncoding('utf8');
+    stderrStream.setEncoding('utf8');
+
+    stdoutStream.on('data', (chunk) => {
+      stdout += chunk;
+      const trimmed = stdout.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        clearTimeout(timeout);
+        resolve(trimmed);
+      }
+    });
+
+    stderrStream.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    child.once('exit', (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Serve process exited early with code ${code}. stderr: ${stderr}`));
+    });
+  });
+}
+
+async function waitForJson(url: string): Promise<unknown> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Unexpected status ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${url}`);
+}
