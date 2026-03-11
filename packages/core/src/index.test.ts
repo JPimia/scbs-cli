@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createCoreServices, planBundle, registerAndScanRepository } from './index';
+import {
+  createCoreServices,
+  createMemoryStore,
+  planBundle,
+  registerAndScanRepository,
+} from './index';
 
 describe('core services', () => {
   it('registers, scans, derives, plans bundles, and caches them', async () => {
@@ -21,6 +26,7 @@ describe('core services', () => {
     });
 
     expect(services.store.files.length).toBe(2);
+    expect(services.store.symbols.map((symbol) => symbol.name)).toEqual(['version']);
     expect(services.store.claims.length).toBeGreaterThan(0);
     expect(services.store.views.length).toBeGreaterThan(0);
     expect(services.store.views.some((view) => view.type === 'command_workflow')).toBeTrue();
@@ -37,6 +43,14 @@ describe('core services', () => {
     expect(result.bundle.commands).toContain('bun test');
     expect(result.bundle.proofHandles.length).toBeGreaterThan(0);
     expect(services.cache.get(result.bundle.cacheKey ?? '')?.id).toBe(result.bundle.id);
+  });
+
+  it('accepts an injected store for durable callers', () => {
+    const store = createMemoryStore();
+    const services = createCoreServices({ store });
+
+    expect(services.store).toBe(store);
+    expect(services.repositories.list()).toEqual([]);
   });
 
   it('inherits bounded parent context when planning a child bundle', () => {

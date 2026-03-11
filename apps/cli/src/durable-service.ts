@@ -1,7 +1,21 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import {
+  applyPostgresMigrations,
+  createCoreServices,
+  createPostgresStore,
+  listAppliedPostgresMigrations,
+  planBundle as planCoreBundle,
+} from '../../../packages/core/src/index';
 import { readJsonFile, writeJsonFile } from '../../../packages/core/src/storage/json-store';
+import type { CoreStore } from '../../../packages/core/src/storage/memory-store';
+import type {
+  AgentReceipt,
+  BundleCacheEntry,
+  TaskBundle,
+} from '../../../packages/protocol/src/index';
 import { InMemoryScbsService, type SeedState, createSeedState } from './in-memory-service';
 import { createApiCapabilities } from './service';
 import type {
@@ -11,33 +25,60 @@ import type {
   RepoChangesInput,
   ScbsService,
 } from './service';
+import type {
+  BundleRecord,
+  ClaimRecord,
+  FactRecord,
+  ReceiptRecord,
+  RepoRecord,
+  ViewRecord,
+} from './types';
 
 interface DurableServiceOptions {
   cwd?: string;
   configPath?: string;
   statePath?: string;
+  databaseUrl?: string;
 }
 
 interface DurablePaths {
   cwd: string;
   configPath: string;
   statePath: string;
+  migrationsPath: string;
+}
+
+interface PostgresBackend {
+  kind: 'postgres';
+  connectionString: string;
 }
 
 const SERVICE_VERSION = '0.1.0';
 const API_VERSION = 'v1' as const;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8791;
+const DEFAULT_DATABASE_URL = 'postgres://127.0.0.1:5432/scbs';
+const MIGRATION_TABLE = '_scbs_migrations';
 
-const defaultConfigContents = (statePath: string) => `service:
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+const defaultConfigContents = (
+  statePath: string,
+  databaseUrl: string,
+  migrationsPath: string
+) => `service:
   name: scbs
   apiVersion: ${API_VERSION}
   host: ${DEFAULT_HOST}
   port: ${DEFAULT_PORT}
 
 storage:
-  adapter: local-json
   statePath: ${statePath}
+  adapter: local-json
+  # adapter: postgres
+  # databaseUrl: ${databaseUrl}
+  # migrationTable: ${MIGRATION_TABLE}
+  # migrationsPath: ${migrationsPath}
 
 features:
   bundlePlanning: true
@@ -52,20 +93,283 @@ function resolveDurablePaths(options: DurableServiceOptions = {}): DurablePaths 
     cwd,
     configPath: options.configPath ?? path.join(cwd, 'config/scbs.config.yaml'),
     statePath: options.statePath ?? path.join(cwd, '.scbs/state.json'),
+    migrationsPath: path.join(repoRoot, 'migrations'),
   };
+}
+
+const now = () => new Date().toISOString();
+
+const slugify = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const dedupe = (values: string[] | undefined): string[] => [...new Set(values ?? [])];
+
+function requireById<T extends { id: string }>(collection: T[], id: string, label: string): T {
+  const match = collection.find((entry) => entry.id === id);
+  if (!match) {
+    throw new Error(`${label} "${id}" was not found.`);
+  }
+  return match;
+}
+
+function toRepoRecord(store: CoreStore, repoId: string): RepoRecord {
+  const repository = requireById(store.repositories, repoId, 'Repository');
+  const repoFiles = store.files.filter((file) => file.repoId === repoId);
+  const firstSeenAt = repoFiles[0]?.lastSeenAt;
+  const lastScannedAt =
+    repoFiles.length > 0 && firstSeenAt
+      ? repoFiles.reduce(
+          (latest, file) => (file.lastSeenAt > latest ? file.lastSeenAt : latest),
+          firstSeenAt
+        )
+      : null;
+
+  return {
+    id: repository.id,
+    name: repository.name,
+    path: repository.rootPath ?? '.',
+    status: repoFiles.length > 0 ? ('scanned' as const) : ('registered' as const),
+    lastScannedAt,
+  };
+}
+
+function toFactRecord(fact: CoreStore['facts'][number]): FactRecord {
+  const subject =
+    typeof fact.value.command === 'string'
+      ? String(fact.value.command)
+      : typeof fact.value.name === 'string'
+        ? `${String(fact.value.name)} (${fact.type})`
+        : `${fact.type}:${fact.subjectId}`;
+
+  return {
+    id: fact.id,
+    repoId: fact.repoId,
+    subject,
+    freshness: fact.freshness === 'expired' ? 'expired' : fact.freshness,
+  };
+}
+
+function toClaimRecord(claim: CoreStore['claims'][number]): ClaimRecord {
+  return {
+    id: claim.id,
+    repoId: claim.repoId,
+    statement: claim.text,
+    factIds: claim.factIds,
+    freshness: claim.freshness === 'partial' ? 'partial' : claim.freshness,
+  };
+}
+
+function toViewRecord(view: CoreStore['views'][number]): ViewRecord {
+  return {
+    id: view.id,
+    repoId: view.repoId,
+    name: view.key,
+    claimIds: view.claimIds,
+    freshness: view.freshness === 'partial' ? 'partial' : view.freshness,
+  };
+}
+
+function toBundleRecord(bundle: TaskBundle, warnings: string[] = []): BundleRecord {
+  const metadata = bundle.metadata ?? {};
+  return {
+    id: bundle.id,
+    repoIds: bundle.repoIds,
+    task: typeof metadata.task === 'string' ? String(metadata.task) : bundle.summary,
+    viewIds: bundle.selectedViewIds,
+    freshness: bundle.freshness === 'unknown' ? 'partial' : bundle.freshness,
+    parentBundleId:
+      typeof metadata.parentBundleId === 'string' ? String(metadata.parentBundleId) : undefined,
+    fileScope: bundle.fileScope,
+    symbolScope: bundle.symbolScope,
+    commands: bundle.commands,
+    proofHandles: bundle.proofHandles,
+    warnings,
+  };
+}
+
+function toReceiptRecord(receipt: AgentReceipt): ReceiptRecord {
+  return {
+    id: receipt.id,
+    bundleId: receipt.bundleId ?? null,
+    agent: receipt.fromRole ?? 'system',
+    summary: receipt.summary,
+    status:
+      receipt.status === 'provisional'
+        ? ('pending' as const)
+        : receipt.status === 'validated'
+          ? ('validated' as const)
+          : ('rejected' as const),
+  };
+}
+
+function toSeedState(store: CoreStore): SeedState {
+  return {
+    repos: store.repositories.map((repository) => toRepoRecord(store, repository.id)),
+    facts: store.facts.map(toFactRecord),
+    claims: store.claims.map(toClaimRecord),
+    views: store.views.map(toViewRecord),
+    bundles: store.bundles.map((bundle) => toBundleRecord(bundle)),
+    receipts: store.receipts.map(toReceiptRecord),
+    bundleCache: store.bundleCache.map((entry) => ({
+      key: entry.cacheKey,
+      bundleId: entry.bundleId,
+      freshness: entry.freshness === 'expired' ? 'expired' : entry.freshness,
+    })),
+  };
+}
+
+function seedStoreFromState(store: CoreStore, state: SeedState): void {
+  const seededAt = now();
+  store.repositories = state.repos.map((repo) => ({
+    id: repo.id,
+    name: repo.name,
+    rootPath: repo.path,
+    provider: 'git',
+    metadata: {},
+    createdAt: seededAt,
+    updatedAt: seededAt,
+  }));
+  store.files = [];
+  store.symbols = [];
+  store.edges = [];
+  store.facts = state.facts.map((fact, index) => ({
+    id: fact.id,
+    repoId: fact.repoId,
+    type: 'seed_fact',
+    subjectType: 'repo',
+    subjectId: `seed_subject_${index}`,
+    value: { subject: fact.subject },
+    anchors: [],
+    versionStamp: `seed-fact-${index}`,
+    freshness:
+      fact.freshness === 'stale' ? 'stale' : fact.freshness === 'expired' ? 'expired' : 'fresh',
+    createdAt: seededAt,
+    updatedAt: seededAt,
+  }));
+  store.claims = state.claims.map((claim) => ({
+    id: claim.id,
+    repoId: claim.repoId,
+    text: claim.statement,
+    type: 'observed',
+    confidence: 1,
+    trustTier: 'source',
+    factIds: claim.factIds,
+    anchors: [],
+    freshness:
+      claim.freshness === 'expired'
+        ? 'expired'
+        : claim.freshness === 'stale'
+          ? 'stale'
+          : claim.freshness === 'unknown'
+            ? 'unknown'
+            : claim.freshness === 'partial'
+              ? 'partial'
+              : 'fresh',
+    invalidationKeys: [],
+    metadata: {},
+    createdAt: seededAt,
+    updatedAt: seededAt,
+  }));
+  store.views = state.views.map((view) => ({
+    id: view.id,
+    repoId: view.repoId,
+    type: 'file_scope',
+    key: view.name,
+    title: view.name,
+    summary: view.name,
+    claimIds: view.claimIds,
+    freshness:
+      view.freshness === 'expired'
+        ? 'expired'
+        : view.freshness === 'stale'
+          ? 'stale'
+          : view.freshness === 'unknown'
+            ? 'unknown'
+            : view.freshness === 'partial'
+              ? 'partial'
+              : 'fresh',
+    createdAt: seededAt,
+    updatedAt: seededAt,
+    metadata: {},
+  }));
+  store.bundles = state.bundles.map((bundle) => ({
+    id: bundle.id,
+    requestId: `seed_${bundle.id}`,
+    repoIds: bundle.repoIds,
+    summary: bundle.task,
+    selectedViewIds: bundle.viewIds,
+    selectedClaimIds: [],
+    fileScope: bundle.fileScope ?? [],
+    symbolScope: bundle.symbolScope ?? [],
+    commands: [],
+    proofHandles: [],
+    freshness:
+      bundle.freshness === 'expired'
+        ? 'expired'
+        : bundle.freshness === 'stale'
+          ? 'stale'
+          : bundle.freshness === 'unknown'
+            ? 'unknown'
+            : bundle.freshness === 'partial'
+              ? 'partial'
+              : 'fresh',
+    cacheKey: `bundle:${bundle.id}`,
+    metadata: { task: bundle.task, parentBundleId: bundle.parentBundleId },
+    createdAt: seededAt,
+  }));
+  store.bundleCache = state.bundleCache.map(
+    (entry, index): BundleCacheEntry => ({
+      id: `bc_seed_${index}`,
+      cacheKey: entry.key,
+      bundleId: entry.bundleId,
+      freshness: entry.freshness === 'unknown' ? 'partial' : entry.freshness,
+      hitCount: 0,
+      createdAt: seededAt,
+      updatedAt: seededAt,
+    })
+  );
+  store.receipts = state.receipts.map((receipt) => ({
+    id: receipt.id,
+    repoIds: receipt.bundleId
+      ? (store.bundles.find((bundle) => bundle.id === receipt.bundleId)?.repoIds ?? [])
+      : [],
+    bundleId: receipt.bundleId ?? undefined,
+    fromRole: receipt.agent,
+    type: 'workflow_note',
+    summary: receipt.summary,
+    payload: {},
+    status:
+      receipt.status === 'pending'
+        ? 'provisional'
+        : receipt.status === 'validated'
+          ? 'validated'
+          : 'rejected',
+    createdAt: seededAt,
+    updatedAt: seededAt,
+  }));
 }
 
 export class DurableScbsService implements ScbsService {
   private readonly paths: DurablePaths;
+  private readonly databaseUrl: string;
+  private readonly explicitDatabaseUrl: boolean;
 
   public constructor(options: DurableServiceOptions = {}) {
     this.paths = resolveDurablePaths(options);
+    this.explicitDatabaseUrl =
+      options.databaseUrl !== undefined || process.env.SCBS_DATABASE_URL !== undefined;
+    this.databaseUrl = options.databaseUrl ?? process.env.SCBS_DATABASE_URL ?? DEFAULT_DATABASE_URL;
   }
 
   public async init(configPath: string) {
     const resolvedConfigPath = this.resolveConfigPath(configPath);
     const configCreated = await this.ensureConfig(configPath);
     const stateCreated = await this.ensureState();
+    await this.syncCompatibilityState();
     return {
       mode: 'local-durable' as const,
       configPath: this.toRelativePath(resolvedConfigPath),
@@ -73,11 +377,17 @@ export class DurableScbsService implements ScbsService {
       created: configCreated || stateCreated,
       configCreated,
       stateCreated,
+      driver: (await this.resolvePostgresBackend())
+        ? ('postgres' as const)
+        : ('local-json' as const),
+      databaseUrl: this.databaseUrl,
+      migrationTable: MIGRATION_TABLE,
     };
   }
 
   public async serve() {
     await this.ensureState();
+    const backend = await this.resolvePostgresBackend();
     return {
       service: 'scbs',
       status: 'listening' as const,
@@ -89,10 +399,13 @@ export class DurableScbsService implements ScbsService {
         capabilities: createApiCapabilities(),
       },
       storage: {
-        adapter: 'local-json' as const,
+        adapter: backend ? ('postgres' as const) : ('local-json' as const),
+        driver: backend ? ('postgres' as const) : ('local-json' as const),
         configPath: this.toRelativePath(this.paths.configPath),
         statePath: this.toRelativePath(this.paths.statePath),
         stateExists: true,
+        databaseUrl: backend?.connectionString ?? this.databaseUrl,
+        migrationTable: MIGRATION_TABLE,
       },
     };
   }
@@ -107,12 +420,15 @@ export class DurableScbsService implements ScbsService {
     if (!stateExisted) {
       await this.ensureState();
     }
+    const backend = await this.resolvePostgresBackend();
 
     return {
       status: configExists ? ('ok' as const) : ('warn' as const),
-      summary: configExists
-        ? 'Local durable SCBS surface is ready with config and state paths resolved.'
-        : 'Local durable state is ready, but the default config file is missing. Run `scbs init` to materialize it.',
+      summary: backend
+        ? 'PostgreSQL durable storage is available and the local compatibility mirror is synchronized.'
+        : configExists
+          ? 'SCBS is using the local compatibility mirror because PostgreSQL is unavailable.'
+          : 'Local durable state is ready, but the default config file is missing. Run `scbs init` to materialize it.',
       api: {
         kind: 'local-durable' as const,
         baseUrl: this.getBaseUrl(),
@@ -121,10 +437,13 @@ export class DurableScbsService implements ScbsService {
         capabilities: createApiCapabilities(),
       },
       storage: {
-        adapter: 'local-json' as const,
+        adapter: backend ? ('postgres' as const) : ('local-json' as const),
+        driver: backend ? ('postgres' as const) : ('local-json' as const),
         configPath: this.toRelativePath(this.paths.configPath),
         statePath: this.toRelativePath(this.paths.statePath),
         stateExists: true,
+        databaseUrl: this.databaseUrl,
+        migrationTable: MIGRATION_TABLE,
       },
       checks: [
         {
@@ -132,12 +451,14 @@ export class DurableScbsService implements ScbsService {
           status: configExists ? ('ok' as const) : ('warn' as const),
           detail: configExists
             ? `Config file is present at ${this.toRelativePath(this.paths.configPath)}.`
-            : `Config file is missing at ${this.toRelativePath(this.paths.configPath)}; run init to create the local durable config.`,
+            : `Config file is missing at ${this.toRelativePath(this.paths.configPath)}; run init to create the durable config.`,
         },
         {
           name: 'storage',
           status: 'ok' as const,
-          detail: `Local durable adapter is active at ${this.toRelativePath(this.paths.statePath)}.`,
+          detail: backend
+            ? `PostgreSQL durable adapter is active at ${this.databaseUrl}.`
+            : `Local compatibility adapter is active at ${this.toRelativePath(this.paths.statePath)} because PostgreSQL could not be reached.`,
         },
         {
           name: 'api',
@@ -155,129 +476,449 @@ export class DurableScbsService implements ScbsService {
   }
 
   public async migrate() {
-    const created = await this.ensureState();
+    const stateCreated = await this.ensureState();
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return {
+        adapter: 'local-json' as const,
+        statePath: this.toRelativePath(this.paths.statePath),
+        applied: stateCreated ? ['0001_local_json_store'] : [],
+        pending: 0,
+        baselineVersion: SERVICE_VERSION,
+        stateCreated,
+        driver: 'local-json' as const,
+        databaseUrl: this.databaseUrl,
+        migrationTable: MIGRATION_TABLE,
+      };
+    }
+
+    const newlyApplied = await applyPostgresMigrations(
+      backend.connectionString,
+      this.paths.migrationsPath
+    );
+    const applied = await listAppliedPostgresMigrations(backend.connectionString);
+    await this.syncCompatibilityState();
     return {
-      adapter: 'local-json' as const,
+      adapter: 'postgres' as const,
       statePath: this.toRelativePath(this.paths.statePath),
-      applied: created ? ['0001_local_json_store'] : [],
+      applied: newlyApplied,
       pending: 0,
       baselineVersion: SERVICE_VERSION,
-      stateCreated: created,
+      stateCreated,
+      driver: 'postgres' as const,
+      databaseUrl: backend.connectionString,
+      migrationTable: MIGRATION_TABLE,
+      currentVersion: applied.at(-1),
     };
   }
 
   public async registerRepo(input: RegisterRepoInput) {
-    return this.withMutation((service) => service.registerRepo(input));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.registerRepo(input));
+    }
+
+    return this.withPostgresMutation(backend, async (store) => {
+      const services = createCoreServices({ store });
+      const repository = services.repositories.register({
+        id: `repo_${slugify(input.name || input.path)}`,
+        name: input.name,
+        rootPath: input.path,
+      });
+      return toRepoRecord(store, repository.id);
+    });
   }
 
   public async listRepos() {
-    return this.withService((service) => service.listRepos());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listRepos());
+    }
+
+    return this.withPostgresService(backend, async (store) =>
+      store.repositories.map((repository) => toRepoRecord(store, repository.id))
+    );
   }
 
   public async showRepo(id: string) {
-    return this.withService((service) => service.showRepo(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.showRepo(id));
+    }
+
+    return this.withPostgresService(backend, async (store) => toRepoRecord(store, id));
   }
 
   public async scanRepo(id: string) {
-    return this.withMutation((service) => service.scanRepo(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.scanRepo(id));
+    }
+
+    return this.withPostgresMutation(backend, async (store) => {
+      const services = createCoreServices({ store });
+      await services.repositories.scan(id);
+      services.derive(id);
+      return toRepoRecord(store, id);
+    });
   }
 
   public async reportRepoChanges(input: RepoChangesInput) {
-    return this.withService((service) => service.reportRepoChanges(input));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.reportRepoChanges(input));
+    }
+
+    return this.withPostgresMutation(backend, async (store) => {
+      requireById(store.repositories, input.id, 'Repository');
+      const services = createCoreServices({ store });
+      const freshness = services.freshness.markChanged(
+        input.files.map((filePath) => ({ repoId: input.id, filePath }))
+      );
+      const impacted = freshness.bundles.filter((bundle) => bundle.freshness !== 'fresh');
+      return {
+        repoId: input.id,
+        files: input.files,
+        impacts: impacted.length || input.files.length,
+      };
+    });
   }
 
   public async listFacts() {
-    return this.withService((service) => service.listFacts());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listFacts());
+    }
+    return this.withPostgresService(backend, async (store) => store.facts.map(toFactRecord));
   }
 
   public async listClaims() {
-    return this.withService((service) => service.listClaims());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listClaims());
+    }
+    return this.withPostgresService(backend, async (store) => store.claims.map(toClaimRecord));
   }
 
   public async showClaim(id: string) {
-    return this.withService((service) => service.showClaim(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.showClaim(id));
+    }
+    return this.withPostgresService(backend, async (store) =>
+      toClaimRecord(requireById(store.claims, id, 'Claim'))
+    );
   }
 
   public async listViews() {
-    return this.withService((service) => service.listViews());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listViews());
+    }
+    return this.withPostgresService(backend, async (store) => store.views.map(toViewRecord));
   }
 
   public async showView(id: string) {
-    return this.withService((service) => service.showView(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.showView(id));
+    }
+    return this.withPostgresService(backend, async (store) =>
+      toViewRecord(requireById(store.views, id, 'View'))
+    );
   }
 
   public async rebuildView(id: string) {
-    return this.withMutation((service) => service.rebuildView(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.rebuildView(id));
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const view = requireById(store.views, id, 'View');
+      view.freshness = 'fresh';
+      view.updatedAt = now();
+      return toViewRecord(view);
+    });
   }
 
   public async planBundle(input: BundlePlanInput) {
-    return this.withMutation((service) => service.planBundle(input));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.planBundle(input));
+    }
+
+    return this.withPostgresMutation(backend, async (store) => {
+      const repoIds = dedupe(input.repoIds ?? (input.repoId ? [input.repoId] : []));
+      const result = planCoreBundle(createCoreServices({ store }), {
+        id: `req_${slugify(input.task)}`,
+        taskTitle: input.task,
+        repoIds,
+        parentBundleId: input.parentBundleId,
+        fileScope: input.fileScope,
+        symbolScope: input.symbolScope,
+        constraints: {
+          includeCommands: true,
+          includeProofHandles: true,
+        },
+      });
+      result.bundle.metadata = {
+        ...result.bundle.metadata,
+        task: input.task,
+      };
+      return toBundleRecord(result.bundle, result.warnings);
+    });
   }
 
   public async showBundle(id: string) {
-    return this.withService((service) => service.showBundle(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.showBundle(id));
+    }
+    return this.withPostgresService(backend, async (store) =>
+      toBundleRecord(requireById(store.bundles, id, 'Bundle'))
+    );
   }
 
   public async getBundleFreshness(id: string) {
-    return this.withService((service) => service.getBundleFreshness(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.getBundleFreshness(id));
+    }
+    return this.withPostgresService(backend, async (store) => {
+      const bundle = requireById(store.bundles, id, 'Bundle');
+      return {
+        bundleId: bundle.id,
+        freshness: bundle.freshness === 'unknown' ? 'partial' : bundle.freshness,
+      };
+    });
   }
 
   public async expireBundle(id: string) {
-    return this.withMutation((service) => service.expireBundle(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.expireBundle(id));
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const bundle = requireById(store.bundles, id, 'Bundle');
+      bundle.freshness = 'expired';
+      return toBundleRecord(bundle);
+    });
   }
 
   public async listBundleCache() {
-    return this.withService((service) => service.listBundleCache());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listBundleCache());
+    }
+    return this.withPostgresMutation(backend, async (store) =>
+      store.bundleCache.map((entry) => ({
+        key: entry.cacheKey,
+        bundleId: entry.bundleId,
+        freshness: entry.freshness,
+      }))
+    );
   }
 
   public async clearBundleCache() {
-    return this.withMutation((service) => service.clearBundleCache());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.clearBundleCache());
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const cleared = store.bundleCache.length;
+      store.bundleCache = [];
+      return { cleared };
+    });
   }
 
   public async getFreshnessImpacts() {
-    return this.withService((service) => service.getFreshnessImpacts());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.getFreshnessImpacts());
+    }
+    return this.withPostgresService(backend, async (store) =>
+      store.bundles.map((bundle) => ({
+        artifactType: 'bundle' as const,
+        artifactId: bundle.id,
+        state: bundle.freshness === 'unknown' ? 'partial' : bundle.freshness,
+      }))
+    );
   }
 
   public async recomputeFreshness() {
-    return this.withMutation((service) => service.recomputeFreshness());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.recomputeFreshness());
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      let updated = 0;
+      for (const bundle of store.bundles) {
+        if (bundle.freshness !== 'fresh') {
+          bundle.freshness = 'fresh';
+          updated += 1;
+        }
+      }
+      return { updated };
+    });
   }
 
   public async getFreshnessStatus() {
-    return this.withService((service) => service.getFreshnessStatus());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.getFreshnessStatus());
+    }
+    return this.withPostgresService(backend, async (store) => {
+      const staleArtifacts = store.bundles.filter((bundle) => bundle.freshness !== 'fresh').length;
+      return {
+        overall: staleArtifacts > 0 ? ('partial' as const) : ('fresh' as const),
+        staleArtifacts,
+      };
+    });
   }
 
   public async submitReceipt(input: ReceiptSubmitInput) {
-    return this.withMutation((service) => service.submitReceipt(input));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.submitReceipt(input));
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const createdAt = now();
+      const receipt: AgentReceipt = {
+        id: `receipt_${slugify(`${input.agent}-${input.summary}`)}`,
+        repoIds: input.bundleId ? requireById(store.bundles, input.bundleId, 'Bundle').repoIds : [],
+        bundleId: input.bundleId ?? undefined,
+        fromRole: input.agent,
+        type: 'workflow_note',
+        summary: input.summary,
+        payload: {},
+        status: 'provisional',
+        createdAt,
+        updatedAt: createdAt,
+      };
+      store.receipts.push(receipt);
+      return toReceiptRecord(receipt);
+    });
   }
 
   public async listReceipts() {
-    return this.withService((service) => service.listReceipts());
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.listReceipts());
+    }
+    return this.withPostgresService(backend, async (store) => store.receipts.map(toReceiptRecord));
   }
 
   public async showReceipt(id: string) {
-    return this.withService((service) => service.showReceipt(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyService((service) => service.showReceipt(id));
+    }
+    return this.withPostgresService(backend, async (store) =>
+      toReceiptRecord(requireById(store.receipts, id, 'Receipt'))
+    );
   }
 
   public async validateReceipt(id: string) {
-    return this.withMutation((service) => service.validateReceipt(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.validateReceipt(id));
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const receipt = requireById(store.receipts, id, 'Receipt');
+      receipt.status = 'validated';
+      receipt.updatedAt = now();
+      return toReceiptRecord(receipt);
+    });
   }
 
   public async rejectReceipt(id: string) {
-    return this.withMutation((service) => service.rejectReceipt(id));
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      return this.withLegacyMutation((service) => service.rejectReceipt(id));
+    }
+    return this.withPostgresMutation(backend, async (store) => {
+      const receipt = requireById(store.receipts, id, 'Receipt');
+      receipt.status = 'rejected';
+      receipt.updatedAt = now();
+      return toReceiptRecord(receipt);
+    });
   }
 
-  private async withService<T>(run: (service: InMemoryScbsService) => Promise<T>): Promise<T> {
+  private async withLegacyService<T>(
+    run: (service: InMemoryScbsService) => Promise<T>
+  ): Promise<T> {
     const state = await this.loadState();
     const service = new InMemoryScbsService(state);
     return run(service);
   }
 
-  private async withMutation<T>(run: (service: InMemoryScbsService) => Promise<T>): Promise<T> {
+  private async withLegacyMutation<T>(
+    run: (service: InMemoryScbsService) => Promise<T>
+  ): Promise<T> {
     const state = await this.loadState();
     const service = new InMemoryScbsService(state);
     const result = await run(service);
     await writeJsonFile(this.paths.statePath, state);
     return result;
+  }
+
+  private async withPostgresService<T>(
+    backend: PostgresBackend,
+    run: (store: CoreStore) => Promise<T>
+  ): Promise<T> {
+    const handle = await createPostgresStore({ connectionString: backend.connectionString });
+    try {
+      await this.seedPostgresIfEmpty(handle.store);
+      const result = await run(handle.store);
+      await this.syncCompatibilityState(handle.store);
+      return result;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async withPostgresMutation<T>(
+    backend: PostgresBackend,
+    run: (store: CoreStore) => Promise<T>
+  ): Promise<T> {
+    const handle = await createPostgresStore({ connectionString: backend.connectionString });
+    try {
+      await this.seedPostgresIfEmpty(handle.store);
+      const result = await run(handle.store);
+      await handle.flush();
+      await this.syncCompatibilityState(handle.store);
+      return result;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async seedPostgresIfEmpty(store: CoreStore): Promise<void> {
+    if (store.repositories.length > 0) {
+      return;
+    }
+    const state = (await readJsonFile<SeedState>(this.paths.statePath)) ?? createSeedState();
+    seedStoreFromState(store, state);
+  }
+
+  private async syncCompatibilityState(store?: CoreStore): Promise<void> {
+    if (store) {
+      await writeJsonFile(this.paths.statePath, toSeedState(store));
+      return;
+    }
+    const backend = await this.resolvePostgresBackend();
+    if (!backend) {
+      await this.ensureState();
+      return;
+    }
+    const handle = await createPostgresStore({ connectionString: backend.connectionString });
+    try {
+      await this.seedPostgresIfEmpty(handle.store);
+      await handle.flush();
+      await writeJsonFile(this.paths.statePath, toSeedState(handle.store));
+    } finally {
+      await handle.close();
+    }
   }
 
   private async loadState(): Promise<SeedState> {
@@ -289,14 +930,17 @@ export class DurableScbsService implements ScbsService {
     if (state) {
       return false;
     }
-
     await writeJsonFile(this.paths.statePath, createSeedState());
     return true;
   }
 
   private async ensureConfig(configPath: string): Promise<boolean> {
     const absoluteConfigPath = this.resolveConfigPath(configPath);
-    const contents = defaultConfigContents(this.paths.statePath);
+    const contents = defaultConfigContents(
+      this.toRelativePath(this.paths.statePath),
+      this.databaseUrl,
+      path.relative(this.paths.cwd, this.paths.migrationsPath) || 'migrations'
+    );
 
     try {
       await mkdir(path.dirname(absoluteConfigPath), { recursive: true });
@@ -311,9 +955,32 @@ export class DurableScbsService implements ScbsService {
       ) {
         return false;
       }
-
       throw error;
     }
+  }
+
+  private async resolvePostgresBackend(): Promise<PostgresBackend | undefined> {
+    try {
+      return await this.initializePostgresBackend();
+    } catch (error) {
+      if (await this.shouldRequirePostgres()) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`PostgreSQL durable storage initialization failed: ${message}`);
+      }
+      return undefined;
+    }
+  }
+
+  private async initializePostgresBackend(): Promise<PostgresBackend> {
+    await applyPostgresMigrations(this.databaseUrl, this.paths.migrationsPath);
+    return {
+      kind: 'postgres',
+      connectionString: this.databaseUrl,
+    };
+  }
+
+  private async shouldRequirePostgres(): Promise<boolean> {
+    return this.explicitDatabaseUrl;
   }
 
   private resolveConfigPath(configPath: string): string {

@@ -5,6 +5,7 @@ import type { CoreStore } from '../storage/memory-store';
 import { createId, nowIso } from '../utils';
 
 export interface RegisterRepositoryInput {
+  id?: string;
   name: string;
   rootPath: string;
   remoteUrl?: string;
@@ -19,7 +20,7 @@ export class RepositoryService {
 
   register(input: RegisterRepositoryInput, now = new Date()): RepositoryRef {
     const repository: RepositoryRef = {
-      id: createId('repo'),
+      id: input.id ?? createId('repo'),
       name: input.name,
       rootPath: input.rootPath,
       remoteUrl: input.remoteUrl,
@@ -54,6 +55,9 @@ export class RepositoryService {
 
     const result = await extractRepository(repository);
     this.store.files = this.store.files.filter((file) => file.repoId !== id).concat(result.files);
+    this.store.symbols = this.store.symbols
+      .filter((symbol) => symbol.repoId !== id)
+      .concat(result.symbols);
     this.store.facts = this.store.facts.filter((fact) => fact.repoId !== id).concat(result.facts);
     this.store.edges = this.store.edges.filter((edge) => edge.repoId !== id).concat(result.edges);
 

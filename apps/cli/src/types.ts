@@ -20,10 +20,13 @@ export interface ApiSurface {
 }
 
 export interface StorageSurface {
-  adapter: 'local-json';
+  adapter: 'local-json' | 'postgres';
+  driver?: 'local-json' | 'postgres';
   configPath: string;
   statePath: string;
   stateExists: boolean;
+  databaseUrl?: string;
+  migrationTable?: string;
 }
 
 export interface InitReport {
@@ -33,6 +36,9 @@ export interface InitReport {
   created: boolean;
   configCreated: boolean;
   stateCreated: boolean;
+  driver?: 'local-json' | 'postgres';
+  databaseUrl?: string;
+  migrationTable?: string;
 }
 
 export interface ServeReport {
@@ -43,12 +49,16 @@ export interface ServeReport {
 }
 
 export interface MigrationReport {
-  adapter: 'local-json';
+  adapter: 'local-json' | 'postgres';
   statePath: string;
   applied: string[];
   pending: number;
   baselineVersion: string;
   stateCreated: boolean;
+  driver?: 'local-json' | 'postgres';
+  databaseUrl?: string;
+  migrationTable?: string;
+  currentVersion?: string;
 }
 
 export interface RepoRecord {
@@ -91,6 +101,13 @@ export interface BundleRecord {
   parentBundleId?: string;
   fileScope?: string[];
   symbolScope?: string[];
+  commands?: string[];
+  proofHandles?: Array<{
+    repoId: string;
+    filePath: string;
+    fileHash: string;
+  }>;
+  warnings?: string[];
 }
 
 export interface FreshnessImpact {

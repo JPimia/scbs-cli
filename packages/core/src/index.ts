@@ -6,11 +6,11 @@ import { deriveClaims } from './claims/service';
 import { FreshnessService } from './freshness/service';
 import { ReceiptService } from './receipts/service';
 import { RepositoryService } from './repos/service';
-import { createMemoryStore } from './storage/memory-store';
+import { type CoreStore, createMemoryStore } from './storage/memory-store';
 import { deriveViews } from './views/service';
 
-export function createCoreServices() {
-  const store = createMemoryStore();
+export function createCoreServices(options: { store?: CoreStore } = {}) {
+  const store = options.store ?? createMemoryStore();
   return {
     store,
     repositories: new RepositoryService(store),
@@ -54,3 +54,4 @@ export function planBundle(
 }
 
 export * from './storage/memory-store';
+export * from './storage/postgres-store';

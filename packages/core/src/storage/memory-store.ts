@@ -6,6 +6,7 @@ import type {
   FactRecord,
   FileRecord,
   RepositoryRef,
+  SymbolRecord,
   TaskBundle,
   ViewRecord,
 } from '../../../protocol/src/index';
@@ -13,6 +14,7 @@ import type {
 export interface CoreStore {
   repositories: RepositoryRef[];
   files: FileRecord[];
+  symbols: SymbolRecord[];
   facts: FactRecord[];
   claims: ClaimRecord[];
   views: ViewRecord[];
@@ -26,6 +28,7 @@ export function createMemoryStore(initial?: Partial<CoreStore>): CoreStore {
   return {
     repositories: [...(initial?.repositories ?? [])],
     files: [...(initial?.files ?? [])],
+    symbols: [...(initial?.symbols ?? [])],
     facts: [...(initial?.facts ?? [])],
     claims: [...(initial?.claims ?? [])],
     views: [...(initial?.views ?? [])],
