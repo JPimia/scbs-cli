@@ -280,6 +280,231 @@ describe('core services', () => {
     expect(result.bundle.selectedClaimIds.includes('claim_unrelated')).toBe(false);
   });
 
+  it('expands the dependency neighborhood when scoped files import an explicit dependency', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'deps', rootPath: '/tmp/deps' });
+
+    services.store.claims = [
+      {
+        id: 'claim_main',
+        repoId: repo.id,
+        text: 'main entry is in scope',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/main.ts', fileHash: 'hash-main' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/main.ts'],
+        metadata: { filePath: 'src/main.ts', symbolName: 'main' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_import_react',
+        repoId: repo.id,
+        text: 'src/main.ts imports react',
+        type: 'composed',
+        confidence: 0.92,
+        trustTier: 'derived',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/main.ts', fileHash: 'hash-main' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/main.ts', 'react'],
+        metadata: {
+          filePath: 'src/main.ts',
+          claimKind: 'file_import',
+          importPath: 'react',
+          relation: 'imports',
+          isExternal: true,
+        },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_main',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/main.ts',
+        title: 'Main entry',
+        summary: 'Main entry implementation',
+        claimIds: ['claim_main'],
+        fileScope: ['src/main.ts'],
+        symbolScope: ['main'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_decision_react',
+        repoId: repo.id,
+        type: 'decision',
+        key: 'react',
+        title: 'Dependency decision react',
+        summary: 'react appears as an explicit dependency choice because src/main.ts imports it.',
+        claimIds: ['claim_import_react'],
+        fileScope: ['src/main.ts'],
+        symbolScope: undefined,
+        freshness: 'fresh',
+        metadata: { importPath: 'react' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const result = planBundle(services, {
+      id: 'req_deps',
+      taskTitle: 'Inspect dependency edge',
+      repoIds: [repo.id],
+      fileScope: ['src/main.ts'],
+    });
+
+    expect(result.bundle.selectedViewIds).toContain('view_main');
+    expect(result.bundle.selectedViewIds).toContain('view_decision_react');
+    expect(result.bundle.selectedClaimIds).toContain('claim_import_react');
+
+    const diagnostics = result.bundle.metadata?.plannerDiagnostics as
+      | {
+          dependencyNeighborhood: { importPaths: string[] };
+          selectionReasons: { views: Array<{ id: string; reason: string }> };
+        }
+      | undefined;
+    expect(diagnostics?.dependencyNeighborhood.importPaths).toEqual(['react']);
+    expect(
+      diagnostics?.selectionReasons.views.some(
+        (entry) => entry.id === 'view_decision_react' && entry.reason === 'dependency neighborhood'
+      )
+    ).toBe(true);
+  });
+
+  it('enforces the token budget and records excluded artifacts in diagnostics', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'budget', rootPath: '/tmp/budget' });
+
+    services.store.facts = [
+      {
+        id: 'fact_test_command',
+        repoId: repo.id,
+        type: 'script_command',
+        subjectType: 'script',
+        subjectId: 'pkg',
+        value: {
+          path: 'package.json',
+          command: 'bun test --coverage --reporter verbose --reporter junit --bail',
+        },
+        anchors: [{ repoId: repo.id, filePath: 'src/main.ts', fileHash: 'hash-main' }],
+        versionStamp: 'hash-main',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.claims = [
+      {
+        id: 'claim_main',
+        repoId: repo.id,
+        text: 'main entry is relevant',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_test_command'],
+        anchors: [{ repoId: repo.id, filePath: 'src/main.ts', fileHash: 'hash-main' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/main.ts'],
+        metadata: { filePath: 'src/main.ts', symbolName: 'main' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_import_big',
+        repoId: repo.id,
+        text: 'src/main.ts imports a very large dependency decision that should be trimmed',
+        type: 'composed',
+        confidence: 0.92,
+        trustTier: 'derived',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/main.ts', fileHash: 'hash-main' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/main.ts', '@big/lib'],
+        metadata: {
+          filePath: 'src/main.ts',
+          claimKind: 'file_import',
+          importPath: '@big/lib',
+          relation: 'imports',
+          isExternal: true,
+        },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_main',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/main.ts',
+        title: 'Main entry',
+        summary: 'Main entry implementation',
+        claimIds: ['claim_main'],
+        fileScope: ['src/main.ts'],
+        symbolScope: ['main'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_big_dep',
+        repoId: repo.id,
+        type: 'decision',
+        key: '@big/lib',
+        title: 'A very large dependency decision view for @big/lib',
+        summary:
+          'This dependency decision exists only to consume a lot of estimated token budget and force a deterministic exclusion during bundle assembly.',
+        claimIds: ['claim_import_big'],
+        fileScope: undefined,
+        symbolScope: undefined,
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const result = planBundle(services, {
+      id: 'req_budget',
+      taskTitle: 'Keep it narrow',
+      repoIds: [repo.id],
+      fileScope: ['src/main.ts'],
+      constraints: {
+        includeCommands: true,
+        maxTokens: 15,
+      },
+    });
+
+    expect(result.bundle.selectedViewIds).toEqual(['view_main']);
+    expect(result.bundle.commands).toEqual([]);
+
+    const diagnostics = result.bundle.metadata?.plannerDiagnostics as
+      | {
+          exclusions: {
+            views: Array<{ id: string; reason: string }>;
+            commands: string[];
+          };
+          tokenBudget: { maxTokens?: number; usedTokens: number };
+        }
+      | undefined;
+    expect(
+      diagnostics?.exclusions.views.some(
+        (entry) => entry.id === 'view_big_dep' && entry.reason === 'token budget'
+      )
+    ).toBe(true);
+    expect(diagnostics?.exclusions.commands).toEqual([
+      'bun test --coverage --reporter verbose --reporter junit --bail',
+    ]);
+    expect(diagnostics?.tokenBudget.maxTokens).toBe(15);
+  });
+
   it('fails explicitly when a requested parent bundle is missing', () => {
     const services = createCoreServices();
     const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
