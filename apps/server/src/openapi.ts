@@ -52,10 +52,18 @@ function schemaNameFor(type: string): string {
       return 'ReceiptRecord';
     case 'receiptList':
       return 'ReceiptRecordList';
+    case 'sisuBundleSnapshot':
+      return 'SisuBundleSnapshot';
+    case 'sisuReceiptSnapshot':
+      return 'SisuReceiptSnapshot';
     case 'bundlePlanInput':
       return 'BundlePlanInput';
     case 'receiptSubmitInput':
       return 'ReceiptSubmitInput';
+    case 'sisuBundlePlanJob':
+      return 'SisuBundlePlanJob';
+    case 'sisuReceiptNote':
+      return 'SisuReceiptNote';
     default:
       return 'Unknown';
   }
@@ -181,6 +189,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             'showView',
             'rebuildView',
             'planBundle',
+            'sisuBundleRequest',
             'showBundle',
             'bundleFreshness',
             'expireBundle',
@@ -190,6 +199,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             'freshnessStatus',
             'recomputeFreshness',
             'createReceipt',
+            'sisuReceipt',
             'listReceipts',
             'showReceipt',
             'validateReceipt',
@@ -204,6 +214,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             showView: { type: 'string' },
             rebuildView: { type: 'string' },
             planBundle: { type: 'string' },
+            sisuBundleRequest: { type: 'string' },
             showBundle: { type: 'string' },
             bundleFreshness: { type: 'string' },
             expireBundle: { type: 'string' },
@@ -213,6 +224,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
             freshnessStatus: { type: 'string' },
             recomputeFreshness: { type: 'string' },
             createReceipt: { type: 'string' },
+            sisuReceipt: { type: 'string' },
             listReceipts: { type: 'string' },
             showReceipt: { type: 'string' },
             validateReceipt: { type: 'string' },
@@ -282,6 +294,28 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
       },
       oneOf: [{ required: ['repo'] }, { required: ['repoIds'] }],
     },
+    SisuBundlePlanJob: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['workspaceId', 'objective', 'repositoryIds'],
+      properties: {
+        workspaceId: { type: 'string' },
+        objective: { type: 'string' },
+        repositoryIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        parentContextId: { type: 'string' },
+        focusFiles: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        focusSymbols: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    },
     BundleRecord: {
       type: 'object',
       additionalProperties: false,
@@ -304,6 +338,34 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           items: { type: 'string' },
         },
         symbolScope: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    },
+    SisuBundleSnapshot: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['workspaceId', 'bundleId', 'objective', 'repositoryIds', 'viewIds', 'freshness'],
+      properties: {
+        workspaceId: { type: 'string' },
+        bundleId: { type: 'string' },
+        objective: { type: 'string' },
+        repositoryIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        viewIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        freshness: componentRef('FreshnessState'),
+        parentContextId: { type: 'string' },
+        focusFiles: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        focusSymbols: {
           type: 'array',
           items: { type: 'string' },
         },
@@ -381,6 +443,17 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
         summary: { type: 'string' },
       },
     },
+    SisuReceiptNote: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['workspaceId', 'agent', 'summary'],
+      properties: {
+        workspaceId: { type: 'string' },
+        agent: { type: 'string' },
+        summary: { type: 'string' },
+        bundleContextId: { type: 'string' },
+      },
+    },
     ReceiptRecord: {
       type: 'object',
       additionalProperties: false,
@@ -391,6 +464,19 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
         agent: { type: 'string' },
         summary: { type: 'string' },
         status: { type: 'string', enum: ['pending', 'validated', 'rejected'] },
+      },
+    },
+    SisuReceiptSnapshot: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['workspaceId', 'receiptId', 'agent', 'summary', 'status'],
+      properties: {
+        workspaceId: { type: 'string' },
+        receiptId: { type: 'string' },
+        agent: { type: 'string' },
+        summary: { type: 'string' },
+        status: { type: 'string', enum: ['pending', 'validated', 'rejected'] },
+        bundleContextId: { type: 'string' },
       },
     },
     ReceiptRecordList: {

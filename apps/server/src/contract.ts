@@ -1,3 +1,4 @@
+import type { SisuBundlePlanJob, SisuReceiptNote } from '../../../packages/adapter-sisu/src/index';
 import type { BundlePlanInput, ReceiptSubmitInput } from './types';
 
 export type HttpMethod = 'GET' | 'POST';
@@ -5,7 +6,11 @@ export type HttpMethod = 'GET' | 'POST';
 export interface ContractRequestBody {
   description: string;
   required: boolean;
-  schema: { type: 'bundlePlanInput' } | { type: 'receiptSubmitInput' };
+  schema:
+    | { type: 'bundlePlanInput' }
+    | { type: 'receiptSubmitInput' }
+    | { type: 'sisuBundlePlanJob' }
+    | { type: 'sisuReceiptNote' };
 }
 
 export interface ContractResponse {
@@ -26,7 +31,9 @@ export interface ContractResponse {
     | { type: 'freshnessStatus' }
     | { type: 'recomputeFreshnessResult' }
     | { type: 'receiptRecord' }
-    | { type: 'receiptList' };
+    | { type: 'receiptList' }
+    | { type: 'sisuBundleSnapshot' }
+    | { type: 'sisuReceiptSnapshot' };
 }
 
 export interface RouteContract {
@@ -158,6 +165,23 @@ export const routeManifest: RouteContract[] = [
     },
   },
   {
+    method: 'POST',
+    path: '/api/v1/integrations/sisu/bundle-request',
+    operationId: 'createSisuBundleRequest',
+    summary: 'Plan a bundle from a SISU integration request payload.',
+    tag: 'Bundles',
+    requestBody: {
+      description: 'SISU bundle planning request.',
+      required: true,
+      schema: { type: 'sisuBundlePlanJob' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Planned SISU bundle snapshot.',
+      schema: { type: 'sisuBundleSnapshot' },
+    },
+  },
+  {
     method: 'GET',
     path: '/api/v1/bundles/cache',
     operationId: 'listBundleCache',
@@ -274,6 +298,23 @@ export const routeManifest: RouteContract[] = [
     },
   },
   {
+    method: 'POST',
+    path: '/api/v1/integrations/sisu/receipt',
+    operationId: 'createSisuReceipt',
+    summary: 'Submit a receipt from a SISU integration payload.',
+    tag: 'Receipts',
+    requestBody: {
+      description: 'SISU receipt submission payload.',
+      required: true,
+      schema: { type: 'sisuReceiptNote' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Created SISU receipt snapshot.',
+      schema: { type: 'sisuReceiptSnapshot' },
+    },
+  },
+  {
     method: 'GET',
     path: '/api/v1/receipts',
     operationId: 'listReceipts',
@@ -340,6 +381,7 @@ export function buildApiIndex(report: { service: string; status: string; api: un
       showView: '/api/v1/views/:id',
       rebuildView: '/api/v1/views/:id/rebuild',
       planBundle: '/api/v1/bundles/plan',
+      sisuBundleRequest: '/api/v1/integrations/sisu/bundle-request',
       showBundle: '/api/v1/bundles/:id',
       bundleFreshness: '/api/v1/bundles/:id/freshness',
       expireBundle: '/api/v1/bundles/:id/expire',
@@ -349,6 +391,7 @@ export function buildApiIndex(report: { service: string; status: string; api: un
       freshnessStatus: '/api/v1/freshness/status',
       recomputeFreshness: '/api/v1/freshness/recompute',
       createReceipt: '/api/v1/receipts',
+      sisuReceipt: '/api/v1/integrations/sisu/receipt',
       listReceipts: '/api/v1/receipts',
       showReceipt: '/api/v1/receipts/:id',
       validateReceipt: '/api/v1/receipts/:id/validate',
@@ -375,9 +418,38 @@ export function normalizeReceiptSubmitInput(body: Record<string, unknown>): Rece
   };
 }
 
+export function normalizeSisuBundlePlanJob(body: Record<string, unknown>): SisuBundlePlanJob {
+  return {
+    workspaceId: getRequiredString(body, 'workspaceId'),
+    objective: getRequiredString(body, 'objective'),
+    repositoryIds: getRequiredStringArray(body, 'repositoryIds'),
+    parentContextId: getOptionalString(body, 'parentContextId') ?? undefined,
+    focusFiles: getOptionalStringArray(body, 'focusFiles'),
+    focusSymbols: getOptionalStringArray(body, 'focusSymbols'),
+  };
+}
+
+export function normalizeSisuReceiptNote(body: Record<string, unknown>): SisuReceiptNote {
+  return {
+    workspaceId: getRequiredString(body, 'workspaceId'),
+    agent: getRequiredString(body, 'agent'),
+    summary: getRequiredString(body, 'summary'),
+    bundleContextId: getOptionalString(body, 'bundleContextId') ?? undefined,
+  };
+}
+
 function getRequiredString(body: Record<string, unknown>, key: string): string {
   const value = body[key];
   if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Missing required field "${key}".`);
+  }
+
+  return value;
+}
+
+function getRequiredStringArray(body: Record<string, unknown>, key: string): string[] {
+  const value = getOptionalStringArray(body, key);
+  if (!value) {
     throw new Error(`Missing required field "${key}".`);
   }
 

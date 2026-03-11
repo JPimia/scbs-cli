@@ -1,9 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
+  mapBundleRecordToSisuBundleSnapshot,
+  mapReceiptRecordToSisuReceiptSnapshot,
+  mapSisuBundlePlanJobToBundlePlanInput,
+  mapSisuReceiptNoteToReceiptSubmitInput,
+} from '../../../packages/adapter-sisu/src/index';
+import {
   buildApiIndex,
   normalizeBundlePlanInput,
   normalizeReceiptSubmitInput,
+  normalizeSisuBundlePlanJob,
+  normalizeSisuReceiptNote,
   routeManifest,
 } from './contract';
 import type { RouteContract } from './contract';
@@ -60,6 +68,17 @@ const routeHandlers = new Map<string, RouteHandler>([
       ),
     }),
   ],
+  [
+    'POST /api/v1/integrations/sisu/bundle-request',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await withBadRequest(async () => {
+        const job = normalizeSisuBundlePlanJob(await readJsonBody(request));
+        const bundle = await service.planBundle(mapSisuBundlePlanJobToBundlePlanInput(job));
+        return mapBundleRecordToSisuBundleSnapshot(bundle, job.workspaceId);
+      }),
+    }),
+  ],
   ['GET /api/v1/bundles/cache', async ({ service }) => ({ body: await service.listBundleCache() })],
   [
     'POST /api/v1/bundles/cache/clear',
@@ -102,6 +121,17 @@ const routeHandlers = new Map<string, RouteHandler>([
       body: await service.submitReceipt(
         await withBadRequest(async () => normalizeReceiptSubmitInput(await readJsonBody(request)))
       ),
+    }),
+  ],
+  [
+    'POST /api/v1/integrations/sisu/receipt',
+    async ({ request, service }) => ({
+      statusCode: 201,
+      body: await withBadRequest(async () => {
+        const note = normalizeSisuReceiptNote(await readJsonBody(request));
+        const receipt = await service.submitReceipt(mapSisuReceiptNoteToReceiptSubmitInput(note));
+        return mapReceiptRecordToSisuReceiptSnapshot(receipt, note.workspaceId);
+      }),
     }),
   ],
   ['GET /api/v1/receipts', async ({ service }) => ({ body: await service.listReceipts() })],

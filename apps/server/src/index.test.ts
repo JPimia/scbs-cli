@@ -65,6 +65,10 @@ function getFixtureById<T extends { id: string }>(fixtures: readonly T[], id: st
 }
 
 class StubService implements ServerScbsService {
+  public lastPlannedBundleInput: BundlePlanInput | undefined;
+
+  public lastSubmittedReceiptInput: ReceiptSubmitInput | undefined;
+
   public async health() {
     return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
   }
@@ -91,6 +95,8 @@ class StubService implements ServerScbsService {
   }
 
   public async planBundle(input: BundlePlanInput) {
+    this.lastPlannedBundleInput = input;
+
     return {
       id: `bundle_${input.task.replace(/\s+/g, '-')}`,
       repoIds: input.repoIds ?? [],
@@ -150,6 +156,8 @@ class StubService implements ServerScbsService {
   }
 
   public async submitReceipt(input: ReceiptSubmitInput) {
+    this.lastSubmittedReceiptInput = input;
+
     return {
       id: 'receipt_1',
       bundleId: input.bundleId,
@@ -252,7 +260,7 @@ describe('server contract', () => {
     const document = buildOpenApiDocument();
     const operations = Object.values(document.paths).flatMap((pathItem) => Object.keys(pathItem));
 
-    expect(routeManifest).toHaveLength(22);
+    expect(routeManifest).toHaveLength(24);
     expect(operations).toHaveLength(routeManifest.length);
     expect(document.paths['/api/v1/claims']?.get).toMatchObject({
       operationId: 'listClaims',
@@ -263,8 +271,14 @@ describe('server contract', () => {
     expect(document.paths['/api/v1/bundles/{id}']?.get).toMatchObject({
       operationId: 'showBundle',
     });
+    expect(document.paths['/api/v1/integrations/sisu/bundle-request']?.post).toMatchObject({
+      operationId: 'createSisuBundleRequest',
+    });
     expect(document.paths['/api/v1/receipts/{id}/validate']?.post).toMatchObject({
       operationId: 'validateReceipt',
+    });
+    expect(document.paths['/api/v1/integrations/sisu/receipt']?.post).toMatchObject({
+      operationId: 'createSisuReceipt',
     });
 
     const jsonArtifact = await readFile(path.join(fixturesRoot, 'scbs-v1.openapi.json'), 'utf8');
@@ -298,6 +312,8 @@ describe('server contract', () => {
         listClaims: '/api/v1/claims',
         rebuildView: '/api/v1/views/:id/rebuild',
         planBundle: '/api/v1/bundles/plan',
+        sisuBundleRequest: '/api/v1/integrations/sisu/bundle-request',
+        sisuReceipt: '/api/v1/integrations/sisu/receipt',
       },
     });
 
@@ -350,6 +366,83 @@ describe('server contract', () => {
     });
   });
 
+  it('maps SISU integration endpoints through the existing bundle and receipt service calls', async () => {
+    const service = new StubService();
+    const server = createScbsHttpServer(service, report);
+    servers.push(server);
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+      server.once('error', reject);
+    });
+
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected an ephemeral TCP address.');
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const bundleResponse = await fetch(`${baseUrl}/api/v1/integrations/sisu/bundle-request`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'workspace_alpha',
+        objective: 'Inspect cache invalidation',
+        repositoryIds: ['repo_local-default'],
+        parentContextId: 'bundle_parent',
+        focusFiles: ['src/index.ts'],
+        focusSymbols: ['planBundle'],
+      }),
+    });
+    expect(bundleResponse.status).toBe(201);
+    await expect(bundleResponse.json()).resolves.toMatchObject({
+      workspaceId: 'workspace_alpha',
+      bundleId: 'bundle_Inspect-cache-invalidation',
+      objective: 'Inspect cache invalidation',
+      repositoryIds: ['repo_local-default'],
+      parentContextId: 'bundle_parent',
+      focusFiles: ['src/index.ts'],
+      focusSymbols: ['planBundle'],
+    });
+    expect(service.lastPlannedBundleInput).toEqual({
+      task: 'Inspect cache invalidation',
+      repoIds: ['repo_local-default'],
+      parentBundleId: 'bundle_parent',
+      fileScope: ['src/index.ts'],
+      symbolScope: ['planBundle'],
+    });
+
+    const receiptResponse = await fetch(`${baseUrl}/api/v1/integrations/sisu/receipt`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'workspace_alpha',
+        agent: 'codex',
+        summary: 'Validation pending',
+        bundleContextId: 'bundle_Inspect-cache-invalidation',
+      }),
+    });
+    expect(receiptResponse.status).toBe(201);
+    await expect(receiptResponse.json()).resolves.toMatchObject({
+      workspaceId: 'workspace_alpha',
+      receiptId: 'receipt_1',
+      agent: 'codex',
+      summary: 'Validation pending',
+      status: 'pending',
+      bundleContextId: 'bundle_Inspect-cache-invalidation',
+    });
+    expect(service.lastSubmittedReceiptInput).toEqual({
+      bundleId: 'bundle_Inspect-cache-invalidation',
+      agent: 'codex',
+      summary: 'Validation pending',
+    });
+  });
+
   it('returns bad request for invalid bundle and receipt payloads', async () => {
     const server = createScbsHttpServer(new StubService(), report);
     servers.push(server);
@@ -392,6 +485,38 @@ describe('server contract', () => {
     });
     expect(invalidReceipt.status).toBe(400);
     await expect(invalidReceipt.json()).resolves.toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "agent".',
+    });
+
+    const invalidSisuBundle = await fetch(`${baseUrl}/api/v1/integrations/sisu/bundle-request`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'workspace_alpha',
+        repositoryIds: ['repo_local-default'],
+      }),
+    });
+    expect(invalidSisuBundle.status).toBe(400);
+    await expect(invalidSisuBundle.json()).resolves.toMatchObject({
+      error: 'Bad Request',
+      message: 'Missing required field "objective".',
+    });
+
+    const invalidSisuReceipt = await fetch(`${baseUrl}/api/v1/integrations/sisu/receipt`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'workspace_alpha',
+        summary: 'Planned a bundle.',
+      }),
+    });
+    expect(invalidSisuReceipt.status).toBe(400);
+    await expect(invalidSisuReceipt.json()).resolves.toMatchObject({
       error: 'Bad Request',
       message: 'Missing required field "agent".',
     });

@@ -240,6 +240,36 @@
         }
       }
     },
+    "/api/v1/integrations/sisu/bundle-request": {
+      "post": {
+        "tags": ["Bundles"],
+        "operationId": "createSisuBundleRequest",
+        "summary": "Plan a bundle from a SISU integration request payload.",
+        "responses": {
+          "201": {
+            "description": "Planned SISU bundle snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisuBundleSnapshot"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "SISU bundle planning request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SisuBundlePlanJob"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bundles/cache": {
       "get": {
         "tags": ["Bundles"],
@@ -472,6 +502,36 @@
         }
       }
     },
+    "/api/v1/integrations/sisu/receipt": {
+      "post": {
+        "tags": ["Receipts"],
+        "operationId": "createSisuReceipt",
+        "summary": "Submit a receipt from a SISU integration payload.",
+        "responses": {
+          "201": {
+            "description": "Created SISU receipt snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisuReceiptSnapshot"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "SISU receipt submission payload.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SisuReceiptNote"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/receipts/{id}": {
       "get": {
         "tags": ["Receipts"],
@@ -651,6 +711,7 @@
               "showView",
               "rebuildView",
               "planBundle",
+              "sisuBundleRequest",
               "showBundle",
               "bundleFreshness",
               "expireBundle",
@@ -660,6 +721,7 @@
               "freshnessStatus",
               "recomputeFreshness",
               "createReceipt",
+              "sisuReceipt",
               "listReceipts",
               "showReceipt",
               "validateReceipt",
@@ -690,6 +752,9 @@
               "planBundle": {
                 "type": "string"
               },
+              "sisuBundleRequest": {
+                "type": "string"
+              },
               "showBundle": {
                 "type": "string"
               },
@@ -715,6 +780,9 @@
                 "type": "string"
               },
               "createReceipt": {
+                "type": "string"
+              },
+              "sisuReceipt": {
                 "type": "string"
               },
               "listReceipts": {
@@ -837,6 +905,40 @@
           }
         ]
       },
+      "SisuBundlePlanJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workspaceId", "objective", "repositoryIds"],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "repositoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parentContextId": {
+            "type": "string"
+          },
+          "focusFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "focusSymbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "BundleRecord": {
         "type": "object",
         "additionalProperties": false,
@@ -873,6 +975,59 @@
             }
           },
           "symbolScope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SisuBundleSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "bundleId",
+          "objective",
+          "repositoryIds",
+          "viewIds",
+          "freshness"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "bundleId": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "repositoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "viewIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/FreshnessState"
+          },
+          "parentContextId": {
+            "type": "string"
+          },
+          "focusFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "focusSymbols": {
             "type": "array",
             "items": {
               "type": "string"
@@ -990,6 +1145,25 @@
           }
         }
       },
+      "SisuReceiptNote": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workspaceId", "agent", "summary"],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "bundleContextId": {
+            "type": "string"
+          }
+        }
+      },
       "ReceiptRecord": {
         "type": "object",
         "additionalProperties": false,
@@ -1010,6 +1184,32 @@
           "status": {
             "type": "string",
             "enum": ["pending", "validated", "rejected"]
+          }
+        }
+      },
+      "SisuReceiptSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workspaceId", "receiptId", "agent", "summary", "status"],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "validated", "rejected"]
+          },
+          "bundleContextId": {
+            "type": "string"
           }
         }
       },
