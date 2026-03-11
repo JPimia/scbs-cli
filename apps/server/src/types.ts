@@ -44,6 +44,22 @@ export interface BundleRecord {
   symbolScope?: string[];
 }
 
+export interface ClaimRecord {
+  id: string;
+  repoId: string;
+  statement: string;
+  factIds: string[];
+  freshness: FreshnessState;
+}
+
+export interface ViewRecord {
+  id: string;
+  repoId: string;
+  name: string;
+  claimIds: string[];
+  freshness: FreshnessState;
+}
+
 export interface FreshnessImpact {
   artifactType: 'fact' | 'claim' | 'view' | 'bundle';
   artifactId: string;
@@ -75,6 +91,11 @@ export interface ReceiptSubmitInput {
 
 export interface ServerScbsService {
   health(): Promise<{ status: 'ok'; service: string; version: string }>;
+  listClaims(): Promise<ClaimRecord[]>;
+  showClaim(id: string): Promise<ClaimRecord>;
+  listViews(): Promise<ViewRecord[]>;
+  showView(id: string): Promise<ViewRecord>;
+  rebuildView(id: string): Promise<ViewRecord>;
   planBundle(input: BundlePlanInput): Promise<BundleRecord>;
   showBundle(id: string): Promise<BundleRecord>;
   getBundleFreshness(id: string): Promise<{ bundleId: string; freshness: FreshnessState }>;

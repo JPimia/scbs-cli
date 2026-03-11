@@ -26,6 +26,14 @@ function schemaNameFor(type: string): string {
       return 'HealthResponse';
     case 'apiIndex':
       return 'ApiIndexResponse';
+    case 'claimRecord':
+      return 'ClaimRecord';
+    case 'claimList':
+      return 'ClaimRecordList';
+    case 'viewRecord':
+      return 'ViewRecord';
+    case 'viewList':
+      return 'ViewRecordList';
     case 'bundleRecord':
       return 'BundleRecord';
     case 'bundleFreshness':
@@ -167,6 +175,11 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           required: [
             'health',
             'root',
+            'listClaims',
+            'showClaim',
+            'listViews',
+            'showView',
+            'rebuildView',
             'planBundle',
             'showBundle',
             'bundleFreshness',
@@ -185,6 +198,11 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           properties: {
             health: { type: 'string' },
             root: { type: 'string' },
+            listClaims: { type: 'string' },
+            showClaim: { type: 'string' },
+            listViews: { type: 'string' },
+            showView: { type: 'string' },
+            rebuildView: { type: 'string' },
             planBundle: { type: 'string' },
             showBundle: { type: 'string' },
             bundleFreshness: { type: 'string' },
@@ -202,6 +220,44 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           },
         },
       },
+    },
+    ClaimRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'repoId', 'statement', 'factIds', 'freshness'],
+      properties: {
+        id: { type: 'string' },
+        repoId: { type: 'string' },
+        statement: { type: 'string' },
+        factIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        freshness: componentRef('FreshnessState'),
+      },
+    },
+    ClaimRecordList: {
+      type: 'array',
+      items: componentRef('ClaimRecord'),
+    },
+    ViewRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'repoId', 'name', 'claimIds', 'freshness'],
+      properties: {
+        id: { type: 'string' },
+        repoId: { type: 'string' },
+        name: { type: 'string' },
+        claimIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        freshness: componentRef('FreshnessState'),
+      },
+    },
+    ViewRecordList: {
+      type: 'array',
+      items: componentRef('ViewRecord'),
     },
     BundlePlanInput: {
       type: 'object',

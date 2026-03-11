@@ -31,6 +31,26 @@ const routeHandlers = new Map<string, RouteHandler>([
   ['GET /health', async ({ service }) => ({ body: await service.health() })],
   ['GET /api/v1', async ({ report }) => ({ body: buildApiIndex(report) })],
   ['GET /api/v1/', async ({ report }) => ({ body: buildApiIndex(report) })],
+  ['GET /api/v1/claims', async ({ service }) => ({ body: await service.listClaims() })],
+  [
+    'GET /api/v1/claims/:id',
+    async ({ params, service }) => ({
+      body: await service.showClaim(getRequiredParam(params, 'id')),
+    }),
+  ],
+  ['GET /api/v1/views', async ({ service }) => ({ body: await service.listViews() })],
+  [
+    'GET /api/v1/views/:id',
+    async ({ params, service }) => ({
+      body: await service.showView(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'POST /api/v1/views/:id/rebuild',
+    async ({ params, service }) => ({
+      body: await service.rebuildView(getRequiredParam(params, 'id')),
+    }),
+  ],
   [
     'POST /api/v1/bundles/plan',
     async ({ request, service }) => ({

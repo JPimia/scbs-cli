@@ -55,6 +55,95 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiIndexResponse"
+  /api/v1/claims:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "listClaims"
+      summary: "List claims from the live SCBS service."
+      responses:
+        200:
+          description: "Claim records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimRecordList"
+  /api/v1/claims/{id}:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "showClaim"
+      summary: "Fetch a claim by id."
+      responses:
+        200:
+          description: "Claim record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Claim identifier."
+          schema:
+            type: "string"
+  /api/v1/views:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "listViews"
+      summary: "List views from the live SCBS service."
+      responses:
+        200:
+          description: "View records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewRecordList"
+  /api/v1/views/{id}:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "showView"
+      summary: "Fetch a view by id."
+      responses:
+        200:
+          description: "View record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "View identifier."
+          schema:
+            type: "string"
+  /api/v1/views/{id}/rebuild:
+    post:
+      tags:
+        - "Bundles"
+      operationId: "rebuildView"
+      summary: "Rebuild a view by id."
+      responses:
+        200:
+          description: "Rebuilt view record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "View identifier."
+          schema:
+            type: "string"
   /api/v1/bundles/plan:
     post:
       tags:
@@ -382,6 +471,11 @@ components:
           required:
             - "health"
             - "root"
+            - "listClaims"
+            - "showClaim"
+            - "listViews"
+            - "showView"
+            - "rebuildView"
             - "planBundle"
             - "showBundle"
             - "bundleFreshness"
@@ -400,6 +494,16 @@ components:
             health:
               type: "string"
             root:
+              type: "string"
+            listClaims:
+              type: "string"
+            showClaim:
+              type: "string"
+            listViews:
+              type: "string"
+            showView:
+              type: "string"
+            rebuildView:
               type: "string"
             planBundle:
               type: "string"
@@ -429,6 +533,58 @@ components:
               type: "string"
             rejectReceipt:
               type: "string"
+    ClaimRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "repoId"
+        - "statement"
+        - "factIds"
+        - "freshness"
+      properties:
+        id:
+          type: "string"
+        repoId:
+          type: "string"
+        statement:
+          type: "string"
+        factIds:
+          type: "array"
+          items:
+            type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+    ClaimRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/ClaimRecord"
+    ViewRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "repoId"
+        - "name"
+        - "claimIds"
+        - "freshness"
+      properties:
+        id:
+          type: "string"
+        repoId:
+          type: "string"
+        name:
+          type: "string"
+        claimIds:
+          type: "array"
+          items:
+            type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+    ViewRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/ViewRecord"
     BundlePlanInput:
       type: "object"
       additionalProperties: false

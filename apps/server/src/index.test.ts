@@ -7,11 +7,87 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { routeManifest } from './contract';
 import { buildOpenApiDocument, buildOpenApiJson, buildOpenApiYaml } from './openapi';
 import { createScbsHttpServer } from './server';
-import type { BundlePlanInput, ReceiptSubmitInput, ServeReport, ServerScbsService } from './types';
+import type {
+  BundlePlanInput,
+  ClaimRecord,
+  ReceiptSubmitInput,
+  ServeReport,
+  ServerScbsService,
+  ViewRecord,
+} from './types';
+
+const claimFixtures: ClaimRecord[] = [
+  {
+    id: 'claim_repo-1_architecture',
+    repoId: 'repo_local-default',
+    statement: 'The system uses a local durable adapter for SCBS state.',
+    factIds: ['fact_repo-1_storage', 'fact_repo-1_runtime'],
+    freshness: 'fresh',
+  },
+  {
+    id: 'claim_repo-1_routes',
+    repoId: 'repo_local-default',
+    statement: 'HTTP route definitions are centralized in the server surface.',
+    factIds: ['fact_repo-1_http'],
+    freshness: 'stale',
+  },
+];
+
+const viewFixtures: ViewRecord[] = [
+  {
+    id: 'view_system-overview',
+    repoId: 'repo_local-default',
+    name: 'System Overview',
+    claimIds: ['claim_repo-1_architecture'],
+    freshness: 'fresh',
+  },
+  {
+    id: 'view_route-map',
+    repoId: 'repo_local-default',
+    name: 'Route Map',
+    claimIds: ['claim_repo-1_routes'],
+    freshness: 'stale',
+  },
+];
+
+function getFixtureById<T extends { id: string }>(fixtures: readonly T[], id: string): T {
+  const match = fixtures.find((fixture) => fixture.id === id);
+  if (match) {
+    return match;
+  }
+
+  const firstFixture = fixtures[0];
+  if (!firstFixture) {
+    throw new Error(`Missing fixtures for ${id}.`);
+  }
+
+  return firstFixture;
+}
 
 class StubService implements ServerScbsService {
   public async health() {
     return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
+  }
+
+  public async listClaims() {
+    return claimFixtures;
+  }
+
+  public async showClaim(id: string) {
+    return getFixtureById(claimFixtures, id);
+  }
+
+  public async listViews() {
+    return viewFixtures;
+  }
+
+  public async showView(id: string) {
+    return getFixtureById(viewFixtures, id);
+  }
+
+  public async rebuildView(id: string) {
+    const view = await this.showView(id);
+    return { ...view, freshness: 'fresh' as const };
   }
 
   public async planBundle(input: BundlePlanInput) {
@@ -176,8 +252,14 @@ describe('server contract', () => {
     const document = buildOpenApiDocument();
     const operations = Object.values(document.paths).flatMap((pathItem) => Object.keys(pathItem));
 
-    expect(routeManifest).toHaveLength(17);
+    expect(routeManifest).toHaveLength(22);
     expect(operations).toHaveLength(routeManifest.length);
+    expect(document.paths['/api/v1/claims']?.get).toMatchObject({
+      operationId: 'listClaims',
+    });
+    expect(document.paths['/api/v1/views/{id}/rebuild']?.post).toMatchObject({
+      operationId: 'rebuildView',
+    });
     expect(document.paths['/api/v1/bundles/{id}']?.get).toMatchObject({
       operationId: 'showBundle',
     });
@@ -213,8 +295,35 @@ describe('server contract', () => {
     await expect(indexResponse.json()).resolves.toMatchObject({
       service: 'scbs',
       endpoints: {
+        listClaims: '/api/v1/claims',
+        rebuildView: '/api/v1/views/:id/rebuild',
         planBundle: '/api/v1/bundles/plan',
       },
+    });
+
+    const claimsResponse = await fetch(`${baseUrl}/api/v1/claims`);
+    expect(claimsResponse.status).toBe(200);
+    await expect(claimsResponse.json()).resolves.toEqual(claimFixtures);
+
+    const claimResponse = await fetch(`${baseUrl}/api/v1/claims/claim_repo-1_architecture`);
+    expect(claimResponse.status).toBe(200);
+    await expect(claimResponse.json()).resolves.toEqual(claimFixtures[0]);
+
+    const viewsResponse = await fetch(`${baseUrl}/api/v1/views`);
+    expect(viewsResponse.status).toBe(200);
+    await expect(viewsResponse.json()).resolves.toEqual(viewFixtures);
+
+    const viewResponse = await fetch(`${baseUrl}/api/v1/views/view_route-map`);
+    expect(viewResponse.status).toBe(200);
+    await expect(viewResponse.json()).resolves.toEqual(viewFixtures[1]);
+
+    const rebuildViewResponse = await fetch(`${baseUrl}/api/v1/views/view_route-map/rebuild`, {
+      method: 'POST',
+    });
+    expect(rebuildViewResponse.status).toBe(200);
+    await expect(rebuildViewResponse.json()).resolves.toEqual({
+      ...viewFixtures[1],
+      freshness: 'fresh',
     });
 
     const planResponse = await fetch(`${baseUrl}/api/v1/bundles/plan`, {

@@ -14,6 +14,10 @@ export interface ContractResponse {
   schema:
     | { type: 'health' }
     | { type: 'apiIndex' }
+    | { type: 'claimRecord' }
+    | { type: 'claimList' }
+    | { type: 'viewRecord' }
+    | { type: 'viewList' }
     | { type: 'bundleRecord' }
     | { type: 'bundleFreshness' }
     | { type: 'bundleCache' }
@@ -71,6 +75,69 @@ export const routeManifest: RouteContract[] = [
       statusCode: 200,
       description: 'Top-level API index and endpoint directory.',
       schema: { type: 'apiIndex' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/claims',
+    operationId: 'listClaims',
+    summary: 'List claims from the live SCBS service.',
+    tag: 'Bundles',
+    success: {
+      statusCode: 200,
+      description: 'Claim records.',
+      schema: { type: 'claimList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/claims/:id',
+    operationId: 'showClaim',
+    summary: 'Fetch a claim by id.',
+    tag: 'Bundles',
+    pathParams: [{ name: 'id', description: 'Claim identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Claim record.',
+      schema: { type: 'claimRecord' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/views',
+    operationId: 'listViews',
+    summary: 'List views from the live SCBS service.',
+    tag: 'Bundles',
+    success: {
+      statusCode: 200,
+      description: 'View records.',
+      schema: { type: 'viewList' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/views/:id',
+    operationId: 'showView',
+    summary: 'Fetch a view by id.',
+    tag: 'Bundles',
+    pathParams: [{ name: 'id', description: 'View identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'View record.',
+      schema: { type: 'viewRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/views/:id/rebuild',
+    operationId: 'rebuildView',
+    summary: 'Rebuild a view by id.',
+    tag: 'Bundles',
+    pathParams: [{ name: 'id', description: 'View identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Rebuilt view record.',
+      schema: { type: 'viewRecord' },
     },
   },
   {
@@ -267,6 +334,11 @@ export function buildApiIndex(report: { service: string; status: string; api: un
     endpoints: {
       health: '/health',
       root: '/api/v1',
+      listClaims: '/api/v1/claims',
+      showClaim: '/api/v1/claims/:id',
+      listViews: '/api/v1/views',
+      showView: '/api/v1/views/:id',
+      rebuildView: '/api/v1/views/:id/rebuild',
       planBundle: '/api/v1/bundles/plan',
       showBundle: '/api/v1/bundles/:id',
       bundleFreshness: '/api/v1/bundles/:id/freshness',
