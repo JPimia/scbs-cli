@@ -20,7 +20,7 @@ const claimFixtures: ClaimRecord[] = [
   {
     id: 'claim_repo-1_architecture',
     repoId: 'repo_local-default',
-    statement: 'The system uses a local durable adapter for SCBS state.',
+    statement: 'The standalone SCBS service uses a local JSON adapter for state.',
     factIds: ['fact_repo-1_storage', 'fact_repo-1_runtime'],
     freshness: 'fresh',
   },
@@ -214,7 +214,7 @@ const report: ServeReport = {
   service: 'scbs',
   status: 'listening',
   api: {
-    kind: 'local-durable',
+    kind: 'standalone',
     baseUrl: 'http://127.0.0.1:8791',
     apiVersion: 'v1',
     mode: 'live',

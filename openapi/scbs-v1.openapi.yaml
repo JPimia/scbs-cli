@@ -459,7 +459,7 @@ components:
         - "capabilities"
       properties:
         kind:
-          const: "local-durable"
+          const: "standalone"
         baseUrl:
           type: "string"
         apiVersion:

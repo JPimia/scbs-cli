@@ -12,7 +12,7 @@ export interface ServiceCapability {
 }
 
 export interface ApiSurface {
-  kind: 'local-durable';
+  kind: 'standalone';
   baseUrl: string;
   apiVersion: 'v1';
   mode: 'dry-run' | 'live';

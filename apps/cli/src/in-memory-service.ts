@@ -294,7 +294,7 @@ const requireById = <T extends { id: string }>(collection: T[], id: string, labe
 };
 
 const createInMemoryApi = (): ApiSurface => ({
-  kind: 'local-durable',
+  kind: 'standalone',
   baseUrl: defaultEndpoint,
   apiVersion: 'v1',
   mode: 'live',
@@ -310,7 +310,7 @@ export class InMemoryScbsService implements ScbsService {
 
   public async init(configPath: string): Promise<InitReport> {
     return {
-      mode: 'local-durable',
+      mode: 'local-json',
       configPath,
       statePath: '.scbs/state.json',
       created: false,

@@ -58,7 +58,7 @@ describe('CLI parsing', () => {
         service: 'scbs',
         status: 'listening',
         api: {
-          kind: 'local-durable',
+          kind: 'standalone',
           apiVersion: 'v1',
           mode: 'live',
         },

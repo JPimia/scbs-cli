@@ -149,7 +149,7 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
       additionalProperties: false,
       required: ['kind', 'baseUrl', 'apiVersion', 'mode', 'capabilities'],
       properties: {
-        kind: { const: 'local-durable' },
+        kind: { const: 'standalone' },
         baseUrl: { type: 'string' },
         apiVersion: { const: 'v1' },
         mode: { type: 'string', enum: ['dry-run', 'live'] },

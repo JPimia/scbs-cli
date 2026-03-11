@@ -90,8 +90,7 @@ export interface ScbsService {
 export const createApiCapabilities = (): ApiSurface['capabilities'] => [
   {
     name: 'bundle-plan',
-    description:
-      'Plan local bundle requests against registered repositories and materialized views.',
+    description: 'Plan bundle requests against registered repositories and materialized views.',
   },
   {
     name: 'receipt-ingest',
@@ -99,17 +98,15 @@ export const createApiCapabilities = (): ApiSurface['capabilities'] => [
   },
   {
     name: 'freshness-check',
-    description:
-      'Inspect bundle freshness, impacts, and recomputation status from the local store.',
+    description: 'Inspect bundle freshness, impacts, and recomputation status from service state.',
   },
   {
     name: 'view-rebuild',
-    description:
-      'Trigger local rebuilds for derived views when freshness or repo changes demand it.',
+    description: 'Trigger rebuilds for derived views when freshness or repo changes demand it.',
   },
   {
     name: 'repo-registration',
-    description: 'Register and scan repositories that participate in the local SCBS surface.',
+    description: 'Register and scan repositories that participate in the standalone SCBS service.',
   },
   {
     name: 'repo-change-report',

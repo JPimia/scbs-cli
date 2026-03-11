@@ -648,7 +648,7 @@
         "required": ["kind", "baseUrl", "apiVersion", "mode", "capabilities"],
         "properties": {
           "kind": {
-            "const": "local-durable"
+            "const": "standalone"
           },
           "baseUrl": {
             "type": "string"

@@ -15,7 +15,7 @@ describe('views package surface', () => {
       service: 'scbs',
       status: 'listening',
       api: {
-        kind: 'local-durable',
+        kind: 'standalone',
         baseUrl: 'http://127.0.0.1:4200',
         apiVersion: 'v1',
         mode: 'live',

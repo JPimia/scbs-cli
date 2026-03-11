@@ -18,7 +18,7 @@ describe('sdk package surface', () => {
     service: 'scbs',
     status: 'ready',
     api: {
-      kind: 'local-durable',
+      kind: 'standalone',
       baseUrl: 'http://127.0.0.1:4100',
       apiVersion: 'v1',
       mode: 'live',

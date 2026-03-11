@@ -12,7 +12,7 @@ export interface ServiceCapability {
 }
 
 export interface ApiSurface {
-  kind: 'local-durable';
+  kind: 'standalone';
   baseUrl: string;
   apiVersion: 'v1';
   mode: 'dry-run' | 'live';
@@ -30,7 +30,7 @@ export interface StorageSurface {
 }
 
 export interface InitReport {
-  mode: 'local-durable';
+  mode: StorageAdapter;
   configPath: string;
   statePath: string;
   created: boolean;
