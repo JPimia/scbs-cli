@@ -1,0 +1,12 @@
+{
+  "name": "@scbs/views",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@scbs/protocol": "workspace:*",
+    "@scbs/sdk": "workspace:*"
+  }
+}

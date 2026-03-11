@@ -1,0 +1,11 @@
+{
+  "name": "@scbs/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@scbs/protocol": "workspace:*"
+  }
+}

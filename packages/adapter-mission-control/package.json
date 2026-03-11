@@ -1,0 +1,11 @@
+{
+  "name": "@scbs/adapter-mission-control",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@scbs/sdk": "workspace:*"
+  }
+}
