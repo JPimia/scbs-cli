@@ -39,7 +39,8 @@ export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres
 bun run verify:postgres
 ```
 
-That command creates a temporary database, applies [`migrations/0001_init.sql`](/home/jarip/projects/scbs/.overstory/worktrees/scbs-verification-builder-r2/migrations/0001_init.sql), verifies the expected tables and indexes, and drops the temporary database.
+That command creates a temporary database, applies `migrations/0001_init.sql`, verifies the expected tables and
+indexes, and drops the temporary database.
 
 Run the CLI locally:
 
@@ -58,6 +59,6 @@ The current CLI implementation stays intentionally thin. It now persists local a
 
 - `bun test` runs the Bun-native unit suites across the workspace.
 - `bun run test:packages` runs the Vitest suites in `apps/cli` and `apps/server`, including the checked-in OpenAPI artifact parity assertions.
-- `bun run verify:openapi` performs an explicit root contract check by regenerating the server OpenAPI JSON and YAML and comparing them to the tracked artifacts under [`openapi/`](/home/jarip/projects/scbs/.overstory/worktrees/scbs-verification-builder-r2/openapi).
+- `bun run verify:openapi` performs an explicit root contract check by regenerating the server OpenAPI JSON and YAML and comparing them to the tracked artifacts under `openapi/`.
 - `bun run verify:postgres` exercises the checked-in PostgreSQL migration against a real PostgreSQL database.
 - `bun run verify:ci` is the CI lane entrypoint and adds PostgreSQL verification to the local lane.
