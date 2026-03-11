@@ -53,6 +53,66 @@ describe('core services', () => {
     expect(services.repositories.list()).toEqual([]);
   });
 
+  it('treats expired cache entries as misses without incrementing hit count', () => {
+    const services = createCoreServices();
+    const expiredAt = '2026-03-11T10:00:00.000Z';
+    const bundle = {
+      id: 'bundle_expired',
+      requestId: 'req_expired',
+      repoIds: [],
+      summary: 'Expired bundle',
+      selectedViewIds: [],
+      selectedClaimIds: [],
+      fileScope: [],
+      symbolScope: [],
+      commands: [],
+      proofHandles: [],
+      freshness: 'expired' as const,
+      cacheKey: 'expired-cache',
+      metadata: {},
+      createdAt: '2026-03-11T09:00:00.000Z',
+      expiresAt: expiredAt,
+    };
+
+    services.store.bundles.push(bundle);
+
+    const entry = services.cache.put(bundle, new Date('2026-03-11T09:00:00.000Z'));
+
+    expect(services.cache.get('expired-cache', new Date('2026-03-11T10:00:00.000Z'))).toBe(
+      undefined
+    );
+    expect(entry.hitCount).toBe(0);
+  });
+
+  it('returns non-expired cache entries and increments hit count', () => {
+    const services = createCoreServices();
+    const bundle = {
+      id: 'bundle_fresh',
+      requestId: 'req_fresh',
+      repoIds: [],
+      summary: 'Fresh bundle',
+      selectedViewIds: [],
+      selectedClaimIds: [],
+      fileScope: [],
+      symbolScope: [],
+      commands: [],
+      proofHandles: [],
+      freshness: 'stale' as const,
+      cacheKey: 'fresh-cache',
+      metadata: {},
+      createdAt: '2026-03-11T09:00:00.000Z',
+      expiresAt: '2026-03-11T10:00:01.000Z',
+    };
+
+    services.store.bundles.push(bundle);
+    const entry = services.cache.put(bundle, new Date('2026-03-11T09:00:00.000Z'));
+
+    expect(services.cache.get('fresh-cache', new Date('2026-03-11T10:00:00.000Z'))?.id).toBe(
+      'bundle_fresh'
+    );
+    expect(entry.hitCount).toBe(1);
+  });
+
   it('inherits bounded parent context when planning a child bundle', () => {
     const services = createCoreServices();
     const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
