@@ -44,7 +44,8 @@ export interface SisuReceiptSnapshot {
 
 export function mapSisuBundlePlanJobToBundlePlanInput(job: SisuBundlePlanJob): BundlePlanInput {
   return {
-    task: job.objective,
+    id: `req_sisu_${job.workspaceId}_${job.objective.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    taskTitle: job.objective,
     repoIds: job.repositoryIds,
     parentBundleId: job.parentContextId,
     fileScope: job.focusFiles,
@@ -59,11 +60,14 @@ export function mapBundleRecordToSisuBundleSnapshot(
   return {
     workspaceId,
     bundleId: bundle.id,
-    objective: bundle.task,
+    objective: bundle.summary,
     repositoryIds: bundle.repoIds,
-    viewIds: bundle.viewIds,
+    viewIds: bundle.selectedViewIds,
     freshness: bundle.freshness,
-    parentContextId: bundle.parentBundleId,
+    parentContextId:
+      typeof bundle.metadata?.parentBundleId === 'string'
+        ? bundle.metadata.parentBundleId
+        : undefined,
     focusFiles: bundle.fileScope,
     focusSymbols: bundle.symbolScope,
   };

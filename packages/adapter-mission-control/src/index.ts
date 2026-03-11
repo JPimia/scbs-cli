@@ -44,7 +44,8 @@ export function mapMissionControlTaskToBundlePlanInput(
   task: MissionControlTaskEnvelope
 ): BundlePlanInput {
   return {
-    task: task.objective,
+    id: `req_mc_${task.missionId}_${task.objective.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    taskTitle: task.objective,
     repoIds: task.repoIds,
     parentBundleId: task.bundleParentId,
     fileScope: task.fileTargets,
@@ -59,11 +60,14 @@ export function mapBundleRecordToMissionControlStatus(
   return {
     missionId,
     bundleId: bundle.id,
-    task: bundle.task,
+    task: bundle.summary,
     repoIds: bundle.repoIds,
-    trackedViewIds: bundle.viewIds,
+    trackedViewIds: bundle.selectedViewIds,
     freshness: bundle.freshness,
-    bundleParentId: bundle.parentBundleId,
+    bundleParentId:
+      typeof bundle.metadata?.parentBundleId === 'string'
+        ? bundle.metadata.parentBundleId
+        : undefined,
   };
 }
 

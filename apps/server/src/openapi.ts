@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 import { routeManifest } from './contract';
 
 const freshnessStateEnum = ['fresh', 'stale', 'expired', 'partial', 'unknown'] as const;
@@ -26,6 +28,14 @@ function schemaNameFor(type: string): string {
       return 'HealthResponse';
     case 'apiIndex':
       return 'ApiIndexResponse';
+    case 'repoRecord':
+      return 'RepoRecord';
+    case 'repoList':
+      return 'RepoRecordList';
+    case 'factList':
+      return 'FactRecordList';
+    case 'repoChangesResult':
+      return 'RepoChangesResult';
     case 'claimRecord':
       return 'ClaimRecord';
     case 'claimList':
@@ -52,14 +62,22 @@ function schemaNameFor(type: string): string {
       return 'ReceiptRecord';
     case 'receiptList':
       return 'ReceiptRecordList';
+    case 'missionControlBundleStatus':
+      return 'MissionControlBundleStatus';
     case 'sisuBundleSnapshot':
       return 'SisuBundleSnapshot';
     case 'sisuReceiptSnapshot':
       return 'SisuReceiptSnapshot';
     case 'bundlePlanInput':
       return 'BundlePlanInput';
+    case 'registerRepoInput':
+      return 'RegisterRepoInput';
+    case 'repoChangesInput':
+      return 'RepoChangesInput';
     case 'receiptSubmitInput':
       return 'ReceiptSubmitInput';
+    case 'missionControlTaskEnvelope':
+      return 'MissionControlTaskEnvelope';
     case 'sisuBundlePlanJob':
       return 'SisuBundlePlanJob';
     case 'sisuReceiptNote':
@@ -183,12 +201,19 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           required: [
             'health',
             'root',
+            'listRepos',
+            'registerRepo',
+            'showRepo',
+            'scanRepo',
+            'reportRepoChanges',
+            'listFacts',
             'listClaims',
             'showClaim',
             'listViews',
             'showView',
             'rebuildView',
             'planBundle',
+            'missionControlRepoSync',
             'sisuBundleRequest',
             'showBundle',
             'bundleFreshness',
@@ -208,12 +233,19 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           properties: {
             health: { type: 'string' },
             root: { type: 'string' },
+            listRepos: { type: 'string' },
+            registerRepo: { type: 'string' },
+            showRepo: { type: 'string' },
+            scanRepo: { type: 'string' },
+            reportRepoChanges: { type: 'string' },
+            listFacts: { type: 'string' },
             listClaims: { type: 'string' },
             showClaim: { type: 'string' },
             listViews: { type: 'string' },
             showView: { type: 'string' },
             rebuildView: { type: 'string' },
             planBundle: { type: 'string' },
+            missionControlRepoSync: { type: 'string' },
             sisuBundleRequest: { type: 'string' },
             showBundle: { type: 'string' },
             bundleFreshness: { type: 'string' },
@@ -252,6 +284,71 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
       type: 'array',
       items: componentRef('ClaimRecord'),
     },
+    RepoRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'name', 'path', 'status', 'lastScannedAt'],
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        path: { type: 'string' },
+        status: { type: 'string', enum: ['registered', 'scanned'] },
+        lastScannedAt: { type: ['string', 'null'] },
+      },
+    },
+    RepoRecordList: {
+      type: 'array',
+      items: componentRef('RepoRecord'),
+    },
+    FactRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'repoId', 'subject', 'freshness'],
+      properties: {
+        id: { type: 'string' },
+        repoId: { type: 'string' },
+        subject: { type: 'string' },
+        freshness: componentRef('FreshnessState'),
+      },
+    },
+    FactRecordList: {
+      type: 'array',
+      items: componentRef('FactRecord'),
+    },
+    RegisterRepoInput: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'path'],
+      properties: {
+        name: { type: 'string' },
+        path: { type: 'string' },
+      },
+    },
+    RepoChangesInput: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'files'],
+      properties: {
+        id: { type: 'string' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    },
+    RepoChangesResult: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['repoId', 'files', 'impacts'],
+      properties: {
+        repoId: { type: 'string' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        impacts: { type: 'integer', minimum: 0 },
+      },
+    },
     ViewRecord: {
       type: 'object',
       additionalProperties: false,
@@ -274,15 +371,18 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
     BundlePlanInput: {
       type: 'object',
       additionalProperties: false,
-      required: ['task'],
+      required: ['id', 'taskTitle', 'repoIds'],
       properties: {
-        task: { type: 'string' },
-        repo: { type: 'string' },
+        id: { type: 'string' },
+        taskTitle: { type: 'string' },
+        taskDescription: { type: 'string' },
         repoIds: {
           type: 'array',
           items: { type: 'string' },
         },
+        role: { type: 'string' },
         parentBundleId: { type: 'string' },
+        externalRef: { type: 'object' },
         fileScope: {
           type: 'array',
           items: { type: 'string' },
@@ -291,8 +391,31 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           type: 'array',
           items: { type: 'string' },
         },
+        constraints: { type: 'object' },
+        metadata: { type: 'object' },
       },
-      oneOf: [{ required: ['repo'] }, { required: ['repoIds'] }],
+    },
+    MissionControlTaskEnvelope: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['missionId', 'objective', 'repoIds'],
+      properties: {
+        missionId: { type: 'string' },
+        objective: { type: 'string' },
+        repoIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        bundleParentId: { type: 'string' },
+        fileTargets: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        symbolTargets: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
     },
     SisuBundlePlanJob: {
       type: 'object',
@@ -319,20 +442,49 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
     BundleRecord: {
       type: 'object',
       additionalProperties: false,
-      required: ['id', 'repoIds', 'task', 'viewIds', 'freshness'],
+      required: [
+        'id',
+        'requestId',
+        'repoIds',
+        'summary',
+        'selectedViewIds',
+        'selectedClaimIds',
+        'fileScope',
+        'symbolScope',
+        'commands',
+        'proofHandles',
+        'freshness',
+        'createdAt',
+      ],
       properties: {
         id: { type: 'string' },
+        requestId: { type: 'string' },
         repoIds: {
           type: 'array',
           items: { type: 'string' },
         },
-        task: { type: 'string' },
-        viewIds: {
+        summary: { type: 'string' },
+        selectedViewIds: {
           type: 'array',
           items: { type: 'string' },
         },
+        selectedClaimIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        commands: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        proofHandles: {
+          type: 'array',
+          items: { type: 'object' },
+        },
         freshness: componentRef('FreshnessState'),
-        parentBundleId: { type: 'string' },
+        cacheKey: { type: 'string' },
+        metadata: { type: 'object' },
+        createdAt: { type: 'string' },
+        expiresAt: { type: 'string' },
         fileScope: {
           type: 'array',
           items: { type: 'string' },
@@ -341,6 +493,26 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           type: 'array',
           items: { type: 'string' },
         },
+      },
+    },
+    MissionControlBundleStatus: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['missionId', 'bundleId', 'task', 'repoIds', 'trackedViewIds', 'freshness'],
+      properties: {
+        missionId: { type: 'string' },
+        bundleId: { type: 'string' },
+        task: { type: 'string' },
+        repoIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        trackedViewIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        freshness: componentRef('FreshnessState'),
+        bundleParentId: { type: 'string' },
       },
     },
     SisuBundleSnapshot: {
@@ -487,7 +659,20 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
 }
 
 export function buildOpenApiJson(): string {
-  return `${JSON.stringify(buildOpenApiDocument(), null, 2)}\n`;
+  const document = `${JSON.stringify(buildOpenApiDocument(), null, 2)}\n`;
+
+  try {
+    return execFileSync(
+      'bun',
+      ['x', '@biomejs/biome', 'format', '--stdin-file-path=openapi/scbs-v1.openapi.json'],
+      {
+        input: document,
+        encoding: 'utf8',
+      }
+    );
+  } catch {
+    return document;
+  }
 }
 
 export function buildOpenApiYaml(): string {

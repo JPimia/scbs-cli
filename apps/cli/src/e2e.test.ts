@@ -254,8 +254,9 @@ describe('CLI happy path', () => {
     expect(JSON.parse(bundle.stdout)).toMatchObject({
       data: {
         id: 'bundle_bootstrap-context',
+        requestId: 'req_bootstrap-context',
         repoIds: ['repo_demo-repo', 'repo_docs-repo'],
-        task: 'bootstrap context',
+        summary: 'Bundle for bootstrap context across 2 views',
       },
     });
 
@@ -279,9 +280,12 @@ describe('CLI happy path', () => {
     expect(JSON.parse(childBundle.stdout)).toMatchObject({
       data: {
         id: 'bundle_inherit-context',
+        requestId: 'req_inherit-context',
         repoIds: ['repo_demo-repo'],
-        task: 'inherit context',
-        parentBundleId: 'bundle_bootstrap-context',
+        summary: 'Bundle for inherit context across 1 views',
+        metadata: {
+          parentBundleId: 'bundle_bootstrap-context',
+        },
         fileScope: ['src/index.ts'],
       },
     });
@@ -648,8 +652,9 @@ describe('CLI happy path', () => {
     expect(bundleResponse.status).toBe(200);
     expect(bundleResponse.body).toMatchObject({
       id: bundle.id,
+      requestId: 'req_bootstrap-context',
       repoIds: [repo.id],
-      task: 'bootstrap context',
+      summary: 'Bundle for bootstrap context across 1 views',
       freshness: 'expired',
     });
 
@@ -706,10 +711,13 @@ describe('CLI happy path', () => {
     expect(createdBundleResponse.status).toBe(201);
     expect(createdBundleResponse.body).toMatchObject({
       id: 'bundle_ship-api',
+      requestId: 'req_ship-api',
       repoIds: [repo.id],
-      task: 'ship api',
+      summary: 'Bundle for ship api across 1 views',
       freshness: 'fresh',
-      parentBundleId: bundle.id,
+      metadata: {
+        parentBundleId: bundle.id,
+      },
       fileScope: ['src/api.ts'],
     });
 
@@ -731,23 +739,24 @@ describe('CLI happy path', () => {
     const bundleCacheEntries = Array.isArray(bundleCacheResponse.body)
       ? bundleCacheResponse.body
       : [];
-    expect(bundleCacheEntries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'bundle:bootstrap',
-          bundleId: 'bundle_bootstrap',
-        }),
-        expect.objectContaining({
-          key: `bundle:${bundle.id}`,
-          bundleId: bundle.id,
-        }),
-        expect.objectContaining({
-          key: 'bundle:bundle_ship-api',
-          bundleId: 'bundle_ship-api',
-          freshness: 'fresh',
-        }),
-      ])
-    );
+    expect(
+      bundleCacheEntries.some(
+        (entry) => entry.key === 'bundle:bootstrap' && entry.bundleId === 'bundle_bootstrap'
+      )
+    ).toBe(true);
+    expect(
+      bundleCacheEntries.some(
+        (entry) => entry.key === 'bundle:bootstrap-context' && entry.bundleId === bundle.id
+      )
+    ).toBe(true);
+    expect(
+      bundleCacheEntries.some(
+        (entry) =>
+          entry.key === 'bundle:ship-api' &&
+          entry.bundleId === 'bundle_ship-api' &&
+          entry.freshness === 'fresh'
+      )
+    ).toBe(true);
 
     const clearBundleCacheResponse = await requestJson(
       'http://127.0.0.1:8791/api/v1/bundles/cache/clear',

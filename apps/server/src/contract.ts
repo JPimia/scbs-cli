@@ -1,5 +1,12 @@
+import type { MissionControlTaskEnvelope } from '../../../packages/adapter-mission-control/src/index';
 import type { SisuBundlePlanJob, SisuReceiptNote } from '../../../packages/adapter-sisu/src/index';
-import type { BundlePlanInput, ReceiptSubmitInput } from './types';
+import { parseBundleRequest } from '../../../packages/protocol/src/index';
+import type {
+  BundlePlanInput,
+  ReceiptSubmitInput,
+  RegisterRepoInput,
+  RepoChangesInput,
+} from './types';
 
 export type HttpMethod = 'GET' | 'POST';
 
@@ -7,8 +14,11 @@ export interface ContractRequestBody {
   description: string;
   required: boolean;
   schema:
+    | { type: 'registerRepoInput' }
+    | { type: 'repoChangesInput' }
     | { type: 'bundlePlanInput' }
     | { type: 'receiptSubmitInput' }
+    | { type: 'missionControlTaskEnvelope' }
     | { type: 'sisuBundlePlanJob' }
     | { type: 'sisuReceiptNote' };
 }
@@ -19,6 +29,10 @@ export interface ContractResponse {
   schema:
     | { type: 'health' }
     | { type: 'apiIndex' }
+    | { type: 'repoRecord' }
+    | { type: 'repoList' }
+    | { type: 'factList' }
+    | { type: 'repoChangesResult' }
     | { type: 'claimRecord' }
     | { type: 'claimList' }
     | { type: 'viewRecord' }
@@ -32,6 +46,7 @@ export interface ContractResponse {
     | { type: 'recomputeFreshnessResult' }
     | { type: 'receiptRecord' }
     | { type: 'receiptList' }
+    | { type: 'missionControlBundleStatus' }
     | { type: 'sisuBundleSnapshot' }
     | { type: 'sisuReceiptSnapshot' };
 }
@@ -82,6 +97,91 @@ export const routeManifest: RouteContract[] = [
       statusCode: 200,
       description: 'Top-level API index and endpoint directory.',
       schema: { type: 'apiIndex' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/repos',
+    operationId: 'listRepos',
+    summary: 'List repositories registered with the SCBS service.',
+    tag: 'System',
+    success: {
+      statusCode: 200,
+      description: 'Repository records.',
+      schema: { type: 'repoList' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/repos/register',
+    operationId: 'registerRepo',
+    summary: 'Register a repository with the SCBS service.',
+    tag: 'System',
+    requestBody: {
+      description: 'Repository registration payload.',
+      required: true,
+      schema: { type: 'registerRepoInput' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Registered repository record.',
+      schema: { type: 'repoRecord' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/repos/:id',
+    operationId: 'showRepo',
+    summary: 'Fetch a repository by id.',
+    tag: 'System',
+    pathParams: [{ name: 'id', description: 'Repository identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Repository record.',
+      schema: { type: 'repoRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/repos/:id/scan',
+    operationId: 'scanRepo',
+    summary: 'Scan a registered repository.',
+    tag: 'System',
+    pathParams: [{ name: 'id', description: 'Repository identifier.' }],
+    success: {
+      statusCode: 200,
+      description: 'Scanned repository record.',
+      schema: { type: 'repoRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/repos/:id/changes',
+    operationId: 'reportRepoChanges',
+    summary: 'Report changed files for a registered repository.',
+    tag: 'System',
+    pathParams: [{ name: 'id', description: 'Repository identifier.' }],
+    requestBody: {
+      description: 'Repository change payload.',
+      required: true,
+      schema: { type: 'repoChangesInput' },
+    },
+    success: {
+      statusCode: 200,
+      description: 'Repository change impact report.',
+      schema: { type: 'repoChangesResult' },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/facts',
+    operationId: 'listFacts',
+    summary: 'List facts from the live SCBS service.',
+    tag: 'System',
+    success: {
+      statusCode: 200,
+      description: 'Fact records.',
+      schema: { type: 'factList' },
     },
   },
   {
@@ -162,6 +262,23 @@ export const routeManifest: RouteContract[] = [
       statusCode: 201,
       description: 'Planned bundle record.',
       schema: { type: 'bundleRecord' },
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/v1/integrations/mission-control/repo-sync',
+    operationId: 'createMissionControlRepoSync',
+    summary: 'Plan a bundle from a Mission Control repo-sync payload.',
+    tag: 'Bundles',
+    requestBody: {
+      description: 'Mission Control repo-sync request.',
+      required: true,
+      schema: { type: 'missionControlTaskEnvelope' },
+    },
+    success: {
+      statusCode: 201,
+      description: 'Planned Mission Control bundle status.',
+      schema: { type: 'missionControlBundleStatus' },
     },
   },
   {
@@ -375,12 +492,19 @@ export function buildApiIndex(report: { service: string; status: string; api: un
     endpoints: {
       health: '/health',
       root: '/api/v1',
+      listRepos: '/api/v1/repos',
+      registerRepo: '/api/v1/repos/register',
+      showRepo: '/api/v1/repos/:id',
+      scanRepo: '/api/v1/repos/:id/scan',
+      reportRepoChanges: '/api/v1/repos/:id/changes',
+      listFacts: '/api/v1/facts',
       listClaims: '/api/v1/claims',
       showClaim: '/api/v1/claims/:id',
       listViews: '/api/v1/views',
       showView: '/api/v1/views/:id',
       rebuildView: '/api/v1/views/:id/rebuild',
       planBundle: '/api/v1/bundles/plan',
+      missionControlRepoSync: '/api/v1/integrations/mission-control/repo-sync',
       sisuBundleRequest: '/api/v1/integrations/sisu/bundle-request',
       showBundle: '/api/v1/bundles/:id',
       bundleFreshness: '/api/v1/bundles/:id/freshness',
@@ -400,14 +524,48 @@ export function buildApiIndex(report: { service: string; status: string; api: un
   };
 }
 
-export function normalizeBundlePlanInput(body: Record<string, unknown>): BundlePlanInput {
+export function normalizeRegisterRepoInput(body: Record<string, unknown>): RegisterRepoInput {
   return {
-    task: getRequiredString(body, 'task'),
-    repoIds: getRequiredRepoIds(body),
-    parentBundleId: getOptionalString(body, 'parentBundleId') ?? undefined,
-    fileScope: getOptionalStringArray(body, 'fileScope'),
-    symbolScope: getOptionalStringArray(body, 'symbolScope'),
+    name: getRequiredString(body, 'name'),
+    path: getRequiredString(body, 'path'),
   };
+}
+
+export function normalizeRepoChangesInput(
+  params: Record<string, string>,
+  body: Record<string, unknown>
+): RepoChangesInput {
+  return {
+    id: getRequiredString(params, 'id'),
+    files: getRequiredStringArray(body, 'files'),
+  };
+}
+
+export function normalizeBundlePlanInput(body: Record<string, unknown>): BundlePlanInput {
+  const taskTitle =
+    typeof body.taskTitle === 'string' && body.taskTitle.length > 0
+      ? body.taskTitle
+      : getRequiredString(body, 'task');
+  return parseBundleRequest(
+    {
+      ...body,
+      id:
+        typeof body.id === 'string' && body.id.length > 0
+          ? body.id
+          : `req_http_${taskTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      taskTitle,
+      taskDescription: getOptionalString(body, 'taskDescription') ?? undefined,
+      repoIds: getRequiredRepoIds(body),
+      role: getOptionalString(body, 'role') ?? undefined,
+      parentBundleId: getOptionalString(body, 'parentBundleId') ?? undefined,
+      fileScope: getOptionalStringArray(body, 'fileScope'),
+      symbolScope: getOptionalStringArray(body, 'symbolScope'),
+      externalRef: getOptionalObject(body, 'externalRef'),
+      constraints: getOptionalObject(body, 'constraints'),
+      metadata: getOptionalObject(body, 'metadata'),
+    },
+    'bundleRequest'
+  );
 }
 
 export function normalizeReceiptSubmitInput(body: Record<string, unknown>): ReceiptSubmitInput {
@@ -415,6 +573,19 @@ export function normalizeReceiptSubmitInput(body: Record<string, unknown>): Rece
     bundleId: getOptionalString(body, 'bundle'),
     agent: getRequiredString(body, 'agent'),
     summary: getRequiredString(body, 'summary'),
+  };
+}
+
+export function normalizeMissionControlTaskEnvelope(
+  body: Record<string, unknown>
+): MissionControlTaskEnvelope {
+  return {
+    missionId: getRequiredString(body, 'missionId'),
+    objective: getRequiredString(body, 'objective'),
+    repoIds: getRequiredStringArray(body, 'repoIds'),
+    bundleParentId: getOptionalString(body, 'bundleParentId') ?? undefined,
+    fileTargets: getOptionalStringArray(body, 'fileTargets'),
+    symbolTargets: getOptionalStringArray(body, 'symbolTargets'),
   };
 }
 
@@ -483,6 +654,21 @@ function getOptionalStringArray(body: Record<string, unknown>, key: string): str
   }
 
   return value;
+}
+
+function getOptionalObject(
+  body: Record<string, unknown>,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = body[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Field "${key}" must be an object.`);
+  }
+
+  return value as Record<string, unknown>;
 }
 
 function getRequiredRepoIds(body: Record<string, unknown>): string[] {

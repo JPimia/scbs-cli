@@ -1,3 +1,4 @@
+import type { BundleRequest } from '../../../packages/protocol/src/index';
 import type {
   ApiSurface,
   BundleRecord,
@@ -6,6 +7,7 @@ import type {
   FactRecord,
   FreshnessImpact,
   FreshnessState,
+  FreshnessWorkerReport,
   InitReport,
   MigrationReport,
   ReceiptRecord,
@@ -25,30 +27,25 @@ export interface RepoChangesInput {
 }
 
 export interface BundlePlanInput {
+  id?: string;
+  taskTitle?: string;
+  taskDescription?: string;
   repoIds?: string[];
   repoId?: string;
   task: string;
+  role?: BundleRequest['role'];
   parentBundleId?: string;
+  externalRef?: BundleRequest['externalRef'];
   fileScope?: string[];
   symbolScope?: string[];
+  constraints?: BundleRequest['constraints'];
+  metadata?: BundleRequest['metadata'];
 }
 
 export interface ReceiptSubmitInput {
   bundleId: string | null;
   agent: string;
   summary: string;
-}
-
-export interface FreshnessWorkerInput {
-  limit: number;
-}
-
-export interface FreshnessWorkerResult {
-  claimed: number;
-  processed: number;
-  succeeded: number;
-  failed: number;
-  updated: number;
 }
 
 export interface ScbsService {
@@ -78,7 +75,7 @@ export interface ScbsService {
   clearBundleCache(): Promise<{ cleared: number }>;
   getFreshnessImpacts(): Promise<FreshnessImpact[]>;
   recomputeFreshness(): Promise<{ updated: number }>;
-  runFreshnessWorker?(input: FreshnessWorkerInput): Promise<FreshnessWorkerResult>;
+  runFreshnessWorker(options?: { limit?: number }): Promise<FreshnessWorkerReport>;
   getFreshnessStatus(): Promise<{ overall: FreshnessState; staleArtifacts: number }>;
   submitReceipt(input: ReceiptSubmitInput): Promise<ReceiptRecord>;
   listReceipts(): Promise<ReceiptRecord[]>;

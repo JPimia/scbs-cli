@@ -23,8 +23,11 @@ import type {
   ClaimRecord,
   DoctorReport,
   FactRecord,
+  FreshnessEventRecord,
   FreshnessImpact,
+  FreshnessJobRecord,
   FreshnessState,
+  FreshnessWorkerReport,
   InitReport,
   MigrationReport,
   ReceiptRecord,
@@ -41,6 +44,8 @@ export interface SeedState {
   bundles: BundleRecord[];
   receipts: ReceiptRecord[];
   bundleCache: Array<{ key: string; bundleId: string; freshness: FreshnessState }>;
+  freshnessEvents: FreshnessEventRecord[];
+  freshnessJobs: FreshnessJobRecord[];
 }
 
 type GraphSeedState = SeedState & {
@@ -60,6 +65,19 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, '');
 
 const dedupe = (values: string[] | undefined): string[] => [...new Set(values ?? [])];
+
+const fileMatchesChange = (filePath: string | undefined, changedFiles: string[]): boolean => {
+  if (!filePath) {
+    return false;
+  }
+
+  return changedFiles.some(
+    (changed) =>
+      filePath === changed ||
+      filePath.startsWith(`${changed}/`) ||
+      changed.startsWith(`${filePath}/`)
+  );
+};
 
 const hasOverlap = (left: string[] | undefined, right: string[] | undefined): boolean => {
   const rightSet = new Set(right ?? []);
@@ -211,6 +229,7 @@ const toDurableView = (view: ProtocolViewRecord): DurableViewRecord =>
     createdAt: view.createdAt,
     updatedAt: view.updatedAt,
   }) as DurableViewRecord;
+
 export const createSeedState = (): SeedState => {
   const repoId = 'repo_local-default';
   const factId = 'fact_repo-layout';
@@ -257,12 +276,21 @@ export const createSeedState = (): SeedState => {
     bundles: [
       {
         id: bundleId,
+        requestId: `req_${bundleId}`,
         repoIds: [repoId],
-        task: 'bootstrap repository context',
-        viewIds: [viewId],
+        summary: 'Bundle for bootstrap repository context',
+        selectedViewIds: [viewId],
+        selectedClaimIds: [claimId],
+        commands: [],
+        proofHandles: [],
         freshness: 'fresh',
         fileScope: ['.'],
         symbolScope: [],
+        metadata: {
+          task: 'bootstrap repository context',
+          taskTitle: 'bootstrap repository context',
+        },
+        createdAt: now(),
       },
     ],
     receipts: [
@@ -281,6 +309,8 @@ export const createSeedState = (): SeedState => {
         freshness: 'fresh',
       },
     ],
+    freshnessEvents: [],
+    freshnessJobs: [],
   };
 };
 
@@ -411,7 +441,89 @@ export class InMemoryScbsService implements ScbsService {
 
   public async reportRepoChanges(input: RepoChangesInput) {
     requireById(this.state.repos, input.id, 'Repository');
-    return { repoId: input.id, files: input.files, impacts: input.files.length };
+    const createdAt = now();
+    const eventId = `evt_${slugify(`${input.id}-${createdAt}`)}`;
+    const jobId = `job_${slugify(`${input.id}-${createdAt}`)}`;
+    this.state.freshnessEvents.push({
+      id: eventId,
+      repoId: input.id,
+      files: [...input.files],
+      createdAt,
+    });
+    this.state.freshnessJobs.push({
+      id: jobId,
+      repoId: input.id,
+      eventId,
+      files: [...input.files],
+      status: 'pending',
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    let impacts = 0;
+    const impactedClaimIds = new Set<string>();
+    for (const claim of this.state.claims) {
+      const durableClaim = claim as ClaimRecord & Record<string, unknown>;
+      const invalidationKeys = Array.isArray(durableClaim.invalidationKeys)
+        ? durableClaim.invalidationKeys.filter(
+            (value): value is string => typeof value === 'string'
+          )
+        : [];
+      const metadata = durableClaim.metadata as Record<string, unknown> | undefined;
+      const filePath = typeof metadata?.filePath === 'string' ? metadata.filePath : undefined;
+      const claimImpacted =
+        claim.repoId === input.id &&
+        (fileMatchesChange(filePath, input.files) ||
+          invalidationKeys.some((key) => fileMatchesChange(key, input.files)));
+      if (!claimImpacted) {
+        continue;
+      }
+
+      impactedClaimIds.add(claim.id);
+      if (claim.freshness === 'fresh') {
+        claim.freshness = 'stale';
+      }
+      impacts += 1;
+    }
+
+    const impactedViewIds = new Set<string>();
+    for (const view of this.state.views) {
+      const durableView = view as ViewRecord & Record<string, unknown>;
+      const fileScope = Array.isArray(durableView.fileScope)
+        ? durableView.fileScope.filter((value): value is string => typeof value === 'string')
+        : [];
+      const viewImpacted =
+        view.repoId === input.id &&
+        (view.claimIds.some((claimId) => impactedClaimIds.has(claimId)) ||
+          fileScope.some((filePath) => fileMatchesChange(filePath, input.files)));
+      if (!viewImpacted) {
+        continue;
+      }
+
+      impactedViewIds.add(view.id);
+      if (view.freshness === 'fresh') {
+        view.freshness = 'stale';
+      }
+      impacts += 1;
+    }
+
+    for (const bundle of this.state.bundles) {
+      const fileScope = Array.isArray(bundle.fileScope) ? bundle.fileScope : [];
+      const bundleImpacted =
+        bundle.repoIds.includes(input.id) &&
+        (bundle.selectedViewIds.some((viewId) => impactedViewIds.has(viewId)) ||
+          fileScope.some((filePath) => fileMatchesChange(filePath, input.files)));
+      if (!bundleImpacted) {
+        continue;
+      }
+
+      if (bundle.freshness !== 'expired') {
+        bundle.freshness = 'expired';
+      }
+      impacts += 1;
+    }
+
+    return { repoId: input.id, files: input.files, impacts };
   }
 
   public async listFacts() {
@@ -441,6 +553,8 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async planBundle(input: BundlePlanInput) {
+    const taskTitle = input.taskTitle ?? input.task;
+    const requestId = input.id ?? `req_${slugify(taskTitle)}`;
     const repoIds = dedupe(input.repoIds ?? (input.repoId ? [input.repoId] : []));
     if (repoIds.length === 0) {
       throw new Error('At least one repository is required.');
@@ -468,7 +582,7 @@ export class InMemoryScbsService implements ScbsService {
     const inheritsParentContext = shouldInheritUnscopedParent || shouldInheritScopedParent;
     const inheritedViewIds =
       inheritsParentContext && parentBundle
-        ? parentBundle.viewIds.filter((viewId) =>
+        ? parentBundle.selectedViewIds.filter((viewId) =>
             repoIds.includes(requireById(this.state.views, viewId, 'View').repoId)
           )
         : [];
@@ -487,10 +601,11 @@ export class InMemoryScbsService implements ScbsService {
       ...(inheritsParentContext ? [parentBundle?.freshness ?? 'fresh'] : []),
     ]);
     const bundle: BundleRecord = {
-      id: `bundle_${slugify(input.task)}`,
+      id: `bundle_${slugify(taskTitle)}`,
+      requestId,
       repoIds,
-      task: input.task,
-      viewIds: [
+      summary: `Bundle for ${taskTitle} across ${repoIds.length} views`,
+      selectedViewIds: [
         ...new Set([
           ...inheritedViewIds,
           ...this.state.views
@@ -498,15 +613,34 @@ export class InMemoryScbsService implements ScbsService {
             .map((view) => view.id),
         ]),
       ],
+      selectedClaimIds: [
+        ...new Set(
+          this.state.views
+            .filter((view) => repoIds.includes(view.repoId))
+            .flatMap((view) => view.claimIds)
+        ),
+      ],
       freshness: bundleFreshness,
-      parentBundleId: parentBundle?.id,
       fileScope: dedupe([...requestedFileScope, ...inheritedFileScope]),
       symbolScope: dedupe([...requestedSymbolScope, ...inheritedSymbolScope]),
+      commands: [],
+      proofHandles: [],
+      cacheKey: `bundle:${slugify(taskTitle)}`,
+      metadata: {
+        task: input.task,
+        taskTitle,
+        taskDescription: input.taskDescription,
+        role: input.role ?? 'builder',
+        parentBundleId: parentBundle?.id,
+        externalRef: input.externalRef,
+      },
+      createdAt: now(),
+      expiresAt: bundleFreshness === 'fresh' ? undefined : now(),
     };
 
     this.state.bundles.push(bundle);
     this.state.bundleCache.push({
-      key: `bundle:${bundle.id}`,
+      key: bundle.cacheKey ?? `bundle:${bundle.id}`,
       bundleId: bundle.id,
       freshness: bundle.freshness,
     });
@@ -523,7 +657,9 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async expireBundle(id: string) {
-    return this.setBundleFreshness(id, 'expired');
+    const bundle = requireById(this.state.bundles, id, 'Bundle');
+    bundle.freshness = 'expired';
+    return bundle;
   }
 
   public async listBundleCache() {
@@ -537,23 +673,76 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async getFreshnessImpacts(): Promise<FreshnessImpact[]> {
-    return this.state.bundles.map((bundle) => ({
-      artifactType: 'bundle',
-      artifactId: bundle.id,
-      state: bundle.freshness,
-    }));
+    return [
+      ...this.state.claims
+        .filter((claim) => claim.freshness !== 'fresh')
+        .map((claim) => ({
+          artifactType: 'claim' as const,
+          artifactId: claim.id,
+          state: claim.freshness,
+        })),
+      ...this.state.views
+        .filter((view) => view.freshness !== 'fresh')
+        .map((view) => ({
+          artifactType: 'view' as const,
+          artifactId: view.id,
+          state: view.freshness,
+        })),
+      ...this.state.bundles
+        .filter((bundle) => bundle.freshness !== 'fresh')
+        .map((bundle) => ({
+          artifactType: 'bundle' as const,
+          artifactId: bundle.id,
+          state: bundle.freshness,
+        })),
+    ];
   }
 
   public async recomputeFreshness() {
-    return this.recomputeBundles(
-      this.state.bundles.filter((bundle) => bundle.freshness !== 'fresh').map((bundle) => bundle.id)
-    );
+    const report = await this.runFreshnessWorker();
+    return { updated: report.processed };
+  }
+
+  public async runFreshnessWorker(options?: { limit?: number }): Promise<FreshnessWorkerReport> {
+    const limit = options?.limit ?? Number.POSITIVE_INFINITY;
+    const pendingJobs = this.state.freshnessJobs.filter((job) => job.status === 'pending');
+    const selectedJobs = pendingJobs.slice(0, Math.max(0, limit));
+
+    for (const job of selectedJobs) {
+      for (const claim of this.state.claims) {
+        if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
+          claim.freshness = 'fresh';
+        }
+      }
+
+      for (const view of this.state.views) {
+        if (view.repoId === job.repoId && view.freshness !== 'fresh') {
+          view.freshness = 'fresh';
+        }
+      }
+
+      for (const bundle of this.state.bundles) {
+        if (bundle.repoIds.includes(job.repoId) && bundle.freshness !== 'fresh') {
+          bundle.freshness = 'fresh';
+        }
+      }
+
+      job.status = 'completed';
+      job.updatedAt = now();
+    }
+
+    return {
+      processed: selectedJobs.length,
+      remaining: this.state.freshnessJobs.filter((job) => job.status === 'pending').length,
+      jobIds: selectedJobs.map((job) => job.id),
+    };
   }
 
   public async getFreshnessStatus() {
-    const staleArtifacts = this.state.bundles.filter(
-      (bundle) => bundle.freshness !== 'fresh'
-    ).length;
+    const staleArtifacts =
+      this.state.claims.filter((claim) => claim.freshness !== 'fresh').length +
+      this.state.views.filter((view) => view.freshness !== 'fresh').length +
+      this.state.bundles.filter((bundle) => bundle.freshness !== 'fresh').length;
     return {
       overall: staleArtifacts > 0 ? ('partial' as const) : ('fresh' as const),
       staleArtifacts,
@@ -623,31 +812,6 @@ export class InMemoryScbsService implements ScbsService {
     const receipt = requireById(this.state.receipts, id, 'Receipt');
     receipt.status = 'rejected';
     return receipt;
-  }
-
-  public async recomputeBundles(bundleIds: string[]) {
-    let updated = 0;
-    for (const bundleId of dedupe(bundleIds)) {
-      const bundle = requireById(this.state.bundles, bundleId, 'Bundle');
-      if (bundle.freshness !== 'fresh') {
-        this.setBundleFreshness(bundleId, 'fresh');
-        updated += 1;
-      }
-    }
-
-    return { updated };
-  }
-
-  private setBundleFreshness(id: string, freshness: FreshnessState) {
-    const bundle = requireById(this.state.bundles, id, 'Bundle');
-    bundle.freshness = freshness;
-    for (const cacheEntry of this.state.bundleCache) {
-      if (cacheEntry.bundleId === id) {
-        cacheEntry.freshness = freshness;
-      }
-    }
-
-    return bundle;
   }
 
   private toProtocolReceipt(receipt: DurableReceiptRecord, bundle?: BundleRecord): AgentReceipt {
