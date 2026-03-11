@@ -343,24 +343,6 @@ describe('CLI happy path', () => {
       staleArtifacts: 1,
     });
 
-    const recomputeResponse = await requestJson(
-      'http://127.0.0.1:8791/api/v1/freshness/recompute',
-      {
-        method: 'POST',
-      }
-    );
-    expect(recomputeResponse.status).toBe(200);
-    expect(recomputeResponse.body).toMatchObject({
-      updated: 1,
-    });
-
-    const freshnessStatusAfter = await requestJson('http://127.0.0.1:8791/api/v1/freshness/status');
-    expect(freshnessStatusAfter.status).toBe(200);
-    expect(freshnessStatusAfter.body).toMatchObject({
-      overall: 'fresh',
-      staleArtifacts: 0,
-    });
-
     const createdBundleResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
       body: {
@@ -375,9 +357,27 @@ describe('CLI happy path', () => {
       id: 'bundle_ship-api',
       repoIds: [repo.id],
       task: 'ship api',
-      freshness: 'fresh',
+      freshness: 'expired',
       parentBundleId: bundle.id,
       fileScope: ['src/api.ts'],
+    });
+
+    const recomputeResponse = await requestJson(
+      'http://127.0.0.1:8791/api/v1/freshness/recompute',
+      {
+        method: 'POST',
+      }
+    );
+    expect(recomputeResponse.status).toBe(200);
+    expect(recomputeResponse.body).toMatchObject({
+      updated: 2,
+    });
+
+    const freshnessStatusAfter = await requestJson('http://127.0.0.1:8791/api/v1/freshness/status');
+    expect(freshnessStatusAfter.status).toBe(200);
+    expect(freshnessStatusAfter.body).toMatchObject({
+      overall: 'fresh',
+      staleArtifacts: 0,
     });
 
     const missingParentResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
