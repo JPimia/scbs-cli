@@ -42,6 +42,38 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
+const dedupe = (values: string[] | undefined): string[] => [...new Set(values ?? [])];
+
+const hasOverlap = (left: string[] | undefined, right: string[] | undefined): boolean => {
+  const rightSet = new Set(right ?? []);
+  return dedupe(left).some((value) => rightSet.has(value));
+};
+
+const intersect = (left: string[] | undefined, right: string[] | undefined): string[] => {
+  const rightSet = new Set(right ?? []);
+  return dedupe(left).filter((value) => rightSet.has(value));
+};
+
+const rollupFreshness = (states: FreshnessState[]): FreshnessState => {
+  if (states.includes('expired')) {
+    return 'expired';
+  }
+
+  if (states.includes('stale')) {
+    return 'stale';
+  }
+
+  if (states.includes('partial')) {
+    return 'partial';
+  }
+
+  if (states.includes('unknown')) {
+    return 'unknown';
+  }
+
+  return 'fresh';
+};
+
 export const createSeedState = (): SeedState => {
   const repoId = 'repo_local-default';
   const factId = 'fact_repo-layout';
@@ -92,6 +124,8 @@ export const createSeedState = (): SeedState => {
         task: 'bootstrap repository context',
         viewIds: [viewId],
         freshness: 'fresh',
+        fileScope: ['.'],
+        symbolScope: [],
       },
     ],
     receipts: [
@@ -271,14 +305,53 @@ export class InMemoryScbsService implements ScbsService {
 
   public async planBundle(input: BundlePlanInput) {
     requireById(this.state.repos, input.repoId, 'Repository');
+    const parentBundle =
+      input.parentBundleId === undefined
+        ? undefined
+        : requireById(this.state.bundles, input.parentBundleId, 'Parent bundle');
+    const requestedFileScope = dedupe(input.fileScope);
+    const requestedSymbolScope = dedupe(input.symbolScope);
+    const parentFileScope = dedupe(parentBundle?.fileScope);
+    const parentSymbolScope = dedupe(parentBundle?.symbolScope);
+    const shouldInheritUnscopedParent =
+      parentBundle !== undefined && parentFileScope.length === 0 && parentSymbolScope.length === 0;
+    const shouldInheritScopedParent =
+      parentBundle !== undefined &&
+      !shouldInheritUnscopedParent &&
+      (requestedFileScope.length === 0 && requestedSymbolScope.length === 0
+        ? parentFileScope.length > 0 || parentSymbolScope.length > 0
+        : hasOverlap(parentFileScope, requestedFileScope) ||
+          hasOverlap(parentSymbolScope, requestedSymbolScope));
+    const inheritsParentContext = shouldInheritUnscopedParent || shouldInheritScopedParent;
+    const inheritedViewIds = inheritsParentContext ? (parentBundle?.viewIds ?? []) : [];
+    const inheritedFileScope =
+      shouldInheritUnscopedParent || requestedFileScope.length === 0
+        ? parentFileScope
+        : intersect(parentFileScope, requestedFileScope);
+    const inheritedSymbolScope =
+      shouldInheritUnscopedParent || requestedSymbolScope.length === 0
+        ? parentSymbolScope
+        : intersect(parentSymbolScope, requestedSymbolScope);
+    const bundleFreshness = rollupFreshness([
+      ...this.state.views
+        .filter((view) => view.repoId === input.repoId)
+        .map((view) => view.freshness),
+      ...(inheritsParentContext ? [parentBundle?.freshness ?? 'fresh'] : []),
+    ]);
     const bundle: BundleRecord = {
       id: `bundle_${slugify(input.task)}`,
       repoIds: [input.repoId],
       task: input.task,
-      viewIds: this.state.views
-        .filter((view) => view.repoId === input.repoId)
-        .map((view) => view.id),
-      freshness: 'fresh',
+      viewIds: [
+        ...new Set([
+          ...inheritedViewIds,
+          ...this.state.views.filter((view) => view.repoId === input.repoId).map((view) => view.id),
+        ]),
+      ],
+      freshness: bundleFreshness,
+      parentBundleId: parentBundle?.id,
+      fileScope: dedupe([...requestedFileScope, ...inheritedFileScope]),
+      symbolScope: dedupe([...requestedSymbolScope, ...inheritedSymbolScope]),
     };
 
     this.state.bundles.push(bundle);

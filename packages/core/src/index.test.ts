@@ -39,6 +39,326 @@ describe('core services', () => {
     expect(services.cache.get(result.bundle.cacheKey ?? '')?.id).toBe(result.bundle.id);
   });
 
+  it('inherits bounded parent context when planning a child bundle', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
+
+    services.store.facts = [
+      {
+        id: 'fact_parent_command',
+        repoId: repo.id,
+        type: 'script_command',
+        subjectType: 'script',
+        subjectId: 'pkg',
+        value: { path: 'package.json', command: 'bun test' },
+        anchors: [{ repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' }],
+        versionStamp: 'hash-parent',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'fact_unrelated_command',
+        repoId: repo.id,
+        type: 'script_command',
+        subjectType: 'script',
+        subjectId: 'docs',
+        value: { path: 'docs/commands.sh', command: 'npm run docs' },
+        anchors: [{ repoId: repo.id, filePath: 'docs/guide.md', fileHash: 'hash-docs' }],
+        versionStamp: 'hash-docs',
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.claims = [
+      {
+        id: 'claim_parent',
+        repoId: repo.id,
+        text: 'parent implementation is relevant',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_parent_command'],
+        anchors: [{ repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/parent.ts'],
+        metadata: { filePath: 'src/parent.ts', symbolName: 'parentSymbol' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_child',
+        repoId: repo.id,
+        text: 'child implementation is relevant',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/child.ts', fileHash: 'hash-child' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/child.ts'],
+        metadata: { filePath: 'src/child.ts', symbolName: 'childSymbol' },
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'claim_unrelated',
+        repoId: repo.id,
+        text: 'docs are unrelated',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: ['fact_unrelated_command'],
+        anchors: [{ repoId: repo.id, filePath: 'docs/guide.md', fileHash: 'hash-docs' }],
+        freshness: 'fresh',
+        invalidationKeys: ['docs/guide.md'],
+        metadata: { filePath: 'docs/guide.md', symbolName: 'docSymbol' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_parent',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/parent.ts',
+        title: 'Parent scope',
+        summary: 'parent implementation view',
+        claimIds: ['claim_parent'],
+        fileScope: ['src/parent.ts'],
+        symbolScope: ['parentSymbol'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_child',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/child.ts',
+        title: 'Child scope',
+        summary: 'child implementation view',
+        claimIds: ['claim_child'],
+        fileScope: ['src/child.ts'],
+        symbolScope: ['childSymbol'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'view_unrelated',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'docs/guide.md',
+        title: 'Docs scope',
+        summary: 'docs view',
+        claimIds: ['claim_unrelated'],
+        fileScope: ['docs/guide.md'],
+        symbolScope: ['docSymbol'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    services.store.bundles.push({
+      id: 'bundle_parent',
+      requestId: 'req_parent',
+      repoIds: [repo.id],
+      summary: 'Parent bundle',
+      selectedViewIds: ['view_parent', 'view_unrelated'],
+      selectedClaimIds: ['claim_parent', 'claim_unrelated'],
+      fileScope: ['src/parent.ts'],
+      symbolScope: ['parentSymbol'],
+      commands: ['bun test', 'npm run docs'],
+      proofHandles: [
+        { repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' },
+        { repoId: repo.id, filePath: 'docs/guide.md', fileHash: 'hash-docs' },
+      ],
+      freshness: 'fresh',
+      cacheKey: 'parent-cache',
+      metadata: {},
+      createdAt: '',
+    });
+
+    const result = planBundle(services, {
+      id: 'req_child',
+      taskTitle: 'Ship child feature',
+      repoIds: [repo.id],
+      fileScope: ['src/child.ts'],
+      parentBundleId: 'bundle_parent',
+      constraints: { includeCommands: true, includeProofHandles: true },
+    });
+
+    expect(result.bundle.metadata?.parentBundleId).toBe('bundle_parent');
+    expect(result.bundle.fileScope).toEqual(['src/child.ts', 'src/parent.ts']);
+    expect(result.bundle.symbolScope).toEqual(['parentSymbol', 'childSymbol']);
+    expect(result.bundle.selectedViewIds).toEqual(['view_parent', 'view_child']);
+    expect(result.bundle.selectedClaimIds).toEqual(['claim_child', 'claim_parent']);
+    expect(result.bundle.commands).toEqual(['bun test']);
+    expect(result.bundle.proofHandles).toEqual([
+      { repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' },
+      { repoId: repo.id, filePath: 'src/child.ts', fileHash: 'hash-child' },
+    ]);
+    expect(result.bundle.selectedViewIds.includes('view_unrelated')).toBe(false);
+    expect(result.bundle.selectedClaimIds.includes('claim_unrelated')).toBe(false);
+  });
+
+  it('fails explicitly when a requested parent bundle is missing', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
+
+    expect(() =>
+      planBundle(services, {
+        id: 'req_missing_parent',
+        taskTitle: 'Ship feature',
+        repoIds: [repo.id],
+        parentBundleId: 'bundle_missing',
+      })
+    ).toThrow('Parent bundle "bundle_missing" was not found.');
+  });
+
+  it('marks inherited stale or expired parent context in child freshness and warnings', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
+    services.store.claims = [
+      {
+        id: 'claim_parent',
+        repoId: repo.id,
+        text: 'parent claim',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/parent.ts'],
+        metadata: { filePath: 'src/parent.ts' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_parent',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/parent.ts',
+        title: 'Parent scope',
+        summary: 'parent view',
+        claimIds: ['claim_parent'],
+        fileScope: ['src/parent.ts'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.bundles.push({
+      id: 'bundle_parent_stale',
+      requestId: 'req_parent',
+      repoIds: [repo.id],
+      summary: 'Parent bundle',
+      selectedViewIds: ['view_parent'],
+      selectedClaimIds: ['claim_parent'],
+      fileScope: ['src/parent.ts'],
+      symbolScope: [],
+      commands: [],
+      proofHandles: [{ repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' }],
+      freshness: 'expired',
+      cacheKey: 'parent-cache',
+      metadata: {},
+      createdAt: '',
+    });
+
+    const result = planBundle(services, {
+      id: 'req_child',
+      taskTitle: 'Ship child feature',
+      repoIds: [repo.id],
+      parentBundleId: 'bundle_parent_stale',
+      constraints: { includeProofHandles: true },
+    });
+
+    expect(result.bundle.fileScope).toContain('src/parent.ts');
+    expect(result.bundle.freshness).toBe('expired');
+    expect(result.warnings).toContain('Inherited parent bundle context is expired');
+    expect(result.warnings).toContain('Bundle freshness is expired');
+  });
+
+  it('changes the cache key when inherited parent context changes', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
+    services.store.claims = [
+      {
+        id: 'claim_parent',
+        repoId: repo.id,
+        text: 'parent claim',
+        type: 'observed',
+        confidence: 1,
+        trustTier: 'source',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/parent.ts', fileHash: 'hash-parent' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/parent.ts'],
+        metadata: { filePath: 'src/parent.ts' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    services.store.views = [
+      {
+        id: 'view_parent',
+        repoId: repo.id,
+        type: 'file_scope',
+        key: 'src/parent.ts',
+        title: 'Parent scope',
+        summary: 'parent view',
+        claimIds: ['claim_parent'],
+        fileScope: ['src/parent.ts'],
+        freshness: 'fresh',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const parentBundle = {
+      id: 'bundle_parent',
+      requestId: 'req_parent',
+      repoIds: [repo.id],
+      summary: 'Parent bundle',
+      selectedViewIds: ['view_parent'],
+      selectedClaimIds: ['claim_parent'],
+      fileScope: ['src/parent.ts'],
+      symbolScope: [],
+      commands: [],
+      proofHandles: [],
+      freshness: 'fresh' as const,
+      cacheKey: 'parent-cache',
+      metadata: {},
+      createdAt: '',
+    };
+    services.store.bundles.push(parentBundle);
+
+    const initial = planBundle(services, {
+      id: 'req_child_1',
+      taskTitle: 'Ship child feature',
+      repoIds: [repo.id],
+      parentBundleId: 'bundle_parent',
+    });
+
+    parentBundle.fileScope = ['src/parent.ts', 'src/extra.ts'];
+
+    const updated = planBundle(services, {
+      id: 'req_child_2',
+      taskTitle: 'Ship child feature',
+      repoIds: [repo.id],
+      parentBundleId: 'bundle_parent',
+    });
+
+    expect(initial.bundle.cacheKey === updated.bundle.cacheKey).toBe(false);
+  });
+
   it('transitions freshness and receipt lifecycle', async () => {
     const services = createCoreServices();
     const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });

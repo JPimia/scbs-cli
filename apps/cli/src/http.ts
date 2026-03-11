@@ -48,9 +48,12 @@ const routeDefinitions: RouteDefinition[] = [
       const body = await readJsonBody(request);
       const task = getRequiredString(body, 'task');
       const repoId = getRequiredString(body, 'repo');
+      const parentBundleId = getOptionalString(body, 'parentBundleId') ?? undefined;
+      const fileScope = getOptionalStringArray(body, 'fileScope');
+      const symbolScope = getOptionalStringArray(body, 'symbolScope');
       return {
         statusCode: 201,
-        body: await service.planBundle({ task, repoId }),
+        body: await service.planBundle({ task, repoId, parentBundleId, fileScope, symbolScope }),
       };
     },
   },
@@ -230,6 +233,22 @@ function getOptionalString(body: Record<string, unknown>, key: string): string |
       'Bad Request',
       `Field "${key}" must be a non-empty string when provided.`
     );
+  }
+
+  return value;
+}
+
+function getOptionalStringArray(body: Record<string, unknown>, key: string): string[] | undefined {
+  const value = body[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== 'string' || entry.length === 0)
+  ) {
+    throw new HttpError(400, 'Bad Request', `Field "${key}" must be an array of strings.`);
   }
 
   return value;

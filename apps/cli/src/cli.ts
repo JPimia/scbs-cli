@@ -145,11 +145,17 @@ const commandDefinitions: CommandDefinition[] = [
     options: [
       { name: 'task', type: 'string', required: true },
       { name: 'repo', type: 'string', required: true },
+      { name: 'parent-bundle', type: 'string' },
+      { name: 'file-scope', type: 'csv' },
+      { name: 'symbol-scope', type: 'csv' },
     ],
     run: ({ service, values }) =>
       service.planBundle({
         task: getRequiredString(values, 'task'),
         repoId: getRequiredString(values, 'repo'),
+        parentBundleId: getOptionalString(values, 'parent-bundle'),
+        fileScope: getOptionalCsv(values, 'file-scope'),
+        symbolScope: getOptionalCsv(values, 'symbol-scope'),
       } satisfies BundlePlanInput),
   },
   {
@@ -372,4 +378,20 @@ const getRequiredCsv = (values: Record<string, string | string[]>, key: string):
   }
 
   return asCsv(value);
+};
+
+const getOptionalString = (
+  values: Record<string, string | string[]>,
+  key: string
+): string | undefined => {
+  const value = values[key];
+  return value === undefined ? undefined : asString(value);
+};
+
+const getOptionalCsv = (
+  values: Record<string, string | string[]>,
+  key: string
+): string[] | undefined => {
+  const value = values[key];
+  return value === undefined ? undefined : asCsv(value);
 };
