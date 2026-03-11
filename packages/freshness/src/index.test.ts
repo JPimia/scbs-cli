@@ -145,4 +145,133 @@ describe('freshness', () => {
     expect(impact.staleViewIds).toEqual(['view_2']);
     expect(impact.expiredBundleIds).toEqual(['bundle_2']);
   });
+
+  it('does not cross-invalidate same-path files across repositories', () => {
+    const impact = determineChangeImpact(
+      [{ repoId: 'repo_beta', filePath: 'src/shared.ts' }],
+      [
+        {
+          id: 'fact_alpha',
+          repoId: 'repo_alpha',
+          type: 'file_hash',
+          subjectType: 'file',
+          subjectId: 'file_alpha',
+          value: {},
+          anchors: [{ repoId: 'repo_alpha', filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+          versionStamp: 'hash-alpha',
+          freshness: 'fresh',
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'fact_beta',
+          repoId: 'repo_beta',
+          type: 'file_hash',
+          subjectType: 'file',
+          subjectId: 'file_beta',
+          value: {},
+          anchors: [{ repoId: 'repo_beta', filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+          versionStamp: 'hash-beta',
+          freshness: 'fresh',
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      [
+        {
+          id: 'claim_alpha',
+          repoId: 'repo_alpha',
+          text: 'alpha shared',
+          type: 'observed',
+          confidence: 1,
+          trustTier: 'source',
+          factIds: ['fact_alpha'],
+          anchors: [{ repoId: 'repo_alpha', filePath: 'src/shared.ts', fileHash: 'hash-alpha' }],
+          freshness: 'fresh',
+          invalidationKeys: ['src/shared.ts'],
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'claim_beta',
+          repoId: 'repo_beta',
+          text: 'beta shared',
+          type: 'observed',
+          confidence: 1,
+          trustTier: 'source',
+          factIds: ['fact_beta'],
+          anchors: [{ repoId: 'repo_beta', filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+          freshness: 'fresh',
+          invalidationKeys: ['src/shared.ts'],
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      [
+        {
+          id: 'view_alpha',
+          repoId: 'repo_alpha',
+          type: 'file_scope',
+          key: 'repo_alpha:src/shared.ts',
+          title: 'Alpha shared',
+          summary: 'alpha',
+          claimIds: ['claim_alpha'],
+          fileScope: ['src/shared.ts'],
+          freshness: 'fresh',
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'view_beta',
+          repoId: 'repo_beta',
+          type: 'file_scope',
+          key: 'repo_beta:src/shared.ts',
+          title: 'Beta shared',
+          summary: 'beta',
+          claimIds: ['claim_beta'],
+          fileScope: ['src/shared.ts'],
+          freshness: 'fresh',
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      [
+        {
+          id: 'bundle_alpha',
+          requestId: 'req_alpha',
+          repoIds: ['repo_alpha'],
+          summary: 'alpha bundle',
+          selectedViewIds: ['view_alpha'],
+          selectedClaimIds: ['claim_alpha'],
+          fileScope: ['src/shared.ts'],
+          symbolScope: [],
+          commands: [],
+          proofHandles: [
+            { repoId: 'repo_alpha', filePath: 'src/shared.ts', fileHash: 'hash-alpha' },
+          ],
+          freshness: 'fresh',
+          createdAt: '',
+        },
+        {
+          id: 'bundle_beta',
+          requestId: 'req_beta',
+          repoIds: ['repo_beta'],
+          summary: 'beta bundle',
+          selectedViewIds: ['view_beta'],
+          selectedClaimIds: ['claim_beta'],
+          fileScope: ['src/shared.ts'],
+          symbolScope: [],
+          commands: [],
+          proofHandles: [{ repoId: 'repo_beta', filePath: 'src/shared.ts', fileHash: 'hash-beta' }],
+          freshness: 'fresh',
+          createdAt: '',
+        },
+      ]
+    );
+
+    expect(impact.staleFactIds).toEqual(['fact_beta']);
+    expect(impact.staleClaimIds).toEqual(['claim_beta']);
+    expect(impact.staleViewIds).toEqual(['view_beta']);
+    expect(impact.expiredBundleIds).toEqual(['bundle_beta']);
+  });
 });
