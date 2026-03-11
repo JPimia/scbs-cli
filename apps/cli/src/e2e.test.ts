@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,102 @@ import { runCli } from './cli';
 import { createDurableScbsService } from './durable-service';
 
 const childProcesses: Array<ReturnType<typeof spawn>> = [];
+const databaseUrlValue = process.env.DATABASE_URL;
+const hasLocalPsql = spawnSync('bash', ['-lc', 'command -v psql >/dev/null 2>&1']).status === 0;
+const hasDocker = spawnSync('bash', ['-lc', 'command -v docker >/dev/null 2>&1']).status === 0;
+const psqlPrefix =
+  hasLocalPsql || hasDocker
+    ? hasLocalPsql
+      ? ['psql']
+      : ['docker', 'run', '--rm', '--network', 'host', 'postgres:16', 'psql']
+    : null;
+const describePostgres = databaseUrlValue && psqlPrefix ? describe : describe.skip;
+
+const quoteIdentifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
+
+const runPsql = async (databaseUrl: string, args: string[], stdin?: string) => {
+  const [command, ...commandArgs] = psqlPrefix ?? [];
+  if (!command) {
+    throw new Error('PostgreSQL tests require either a local "psql" client or Docker.');
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, [...commandArgs, '-d', databaseUrl, ...args], {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.stdin.end(stdin);
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`psql terminated with signal ${signal}`));
+        return;
+      }
+
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `psql exited with code ${code}`));
+        return;
+      }
+
+      resolve(stdout.trim());
+    });
+  });
+};
+
+const queryRows = async (databaseUrl: string, sql: string) =>
+  (await runPsql(databaseUrl, ['-v', 'ON_ERROR_STOP=1', '-At', '-F', '\t', '-c', sql]))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split('\t'));
+
+const withTempPostgresDatabase = async <T>(
+  run: (databaseUrl: string) => Promise<T>
+): Promise<T> => {
+  if (!databaseUrlValue) {
+    throw new Error('DATABASE_URL is required for PostgreSQL tests.');
+  }
+
+  const rootDatabaseUrl = new URL(databaseUrlValue);
+  const tempDatabaseName = `scbs_e2e_${randomUUID().replaceAll('-', '_')}`;
+  const tempDatabaseUrl = new URL(rootDatabaseUrl);
+  tempDatabaseUrl.pathname = `/${tempDatabaseName}`;
+  const migrationPath = path.join(process.cwd(), 'migrations', '0001_init.sql');
+  const migrationSql = await readFile(migrationPath, 'utf8');
+
+  await runPsql(rootDatabaseUrl.toString(), [
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-c',
+    `CREATE DATABASE ${quoteIdentifier(tempDatabaseName)};`,
+  ]);
+  await runPsql(tempDatabaseUrl.toString(), ['-v', 'ON_ERROR_STOP=1'], migrationSql);
+
+  try {
+    return await run(tempDatabaseUrl.toString());
+  } finally {
+    await runPsql(rootDatabaseUrl.toString(), [
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-c',
+      [
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${tempDatabaseName}' AND pid <> pg_backend_pid();`,
+        `DROP DATABASE IF EXISTS ${quoteIdentifier(tempDatabaseName)};`,
+      ].join(' '),
+    ]);
+  }
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -500,6 +597,51 @@ describe('CLI happy path', () => {
     expect(unknownRouteResponse.body).toMatchObject({
       error: 'Not Found',
       message: 'No route for GET /api/v1/nope',
+    });
+  });
+});
+
+describePostgres('CLI PostgreSQL freshness recompute jobs', () => {
+  it('enqueues durable recompute jobs for expired bundles', async () => {
+    await withTempPostgresDatabase(async (databaseUrl) => {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-enqueue-'));
+      const service = createDurableScbsService({ cwd, databaseUrl });
+      const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
+      const bundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
+
+      await service.expireBundle(bundle.id);
+
+      await expect(
+        queryRows(databaseUrl, 'SELECT bundle_id, status FROM freshness_recompute_jobs;')
+      ).resolves.toEqual([[bundle.id, 'pending']]);
+    });
+  });
+
+  it('drains PostgreSQL recompute jobs to completion without widening the target set', async () => {
+    await withTempPostgresDatabase(async (databaseUrl) => {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), 'scbs-pg-drain-'));
+      const service = createDurableScbsService({ cwd, databaseUrl });
+      const repo = await service.registerRepo({ name: 'demo-repo', path: '/tmp/demo-repo' });
+      const targetedBundle = await service.planBundle({ repoIds: [repo.id], task: 'refresh docs' });
+      const untouchedBundle = await service.planBundle({ repoIds: [repo.id], task: 'keep warm' });
+
+      await service.expireBundle(targetedBundle.id);
+
+      await expect(service.recomputeFreshness()).resolves.toMatchObject({ updated: 1 });
+      await expect(service.showBundle(targetedBundle.id)).resolves.toMatchObject({
+        id: targetedBundle.id,
+        freshness: 'fresh',
+      });
+      await expect(service.showBundle(untouchedBundle.id)).resolves.toMatchObject({
+        id: untouchedBundle.id,
+        freshness: 'fresh',
+      });
+      await expect(
+        queryRows(
+          databaseUrl,
+          'SELECT bundle_id, status FROM freshness_recompute_jobs ORDER BY requested_at, id;'
+        )
+      ).resolves.toEqual([[targetedBundle.id, 'completed']]);
     });
   });
 });

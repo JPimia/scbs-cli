@@ -1,3 +1,5 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,8 +61,14 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8791;
 const DEFAULT_DATABASE_URL = 'postgres://127.0.0.1:5432/scbs';
 const MIGRATION_TABLE = '_scbs_migrations';
-
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+interface FreshnessRecomputeJob {
+  id: string;
+  bundleId: string;
+}
+
+const quoteLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 const defaultConfigContents = (
   statePath: string,
@@ -86,6 +94,143 @@ features:
   freshnessChecks: true
   rebuildTriggers: true
 `;
+
+class PostgresFreshnessJobStore {
+  private readonly psqlPrefix: string[];
+
+  public constructor(private readonly databaseUrl: string) {
+    const hasLocalPsql = spawnSync('bash', ['-lc', 'command -v psql >/dev/null 2>&1']).status === 0;
+    const hasDocker = spawnSync('bash', ['-lc', 'command -v docker >/dev/null 2>&1']).status === 0;
+
+    if (!hasLocalPsql && !hasDocker) {
+      throw new Error('PostgreSQL freshness jobs require either a local "psql" client or Docker.');
+    }
+
+    this.psqlPrefix = hasLocalPsql
+      ? ['psql']
+      : ['docker', 'run', '--rm', '--network', 'host', 'postgres:16', 'psql'];
+  }
+
+  public async enqueueBundle(bundleId: string): Promise<void> {
+    await this.execSql(`
+      INSERT INTO freshness_recompute_jobs (id, bundle_id, status, requested_at)
+      SELECT ${quoteLiteral(randomUUID())}, ${quoteLiteral(bundleId)}, 'pending', NOW()
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM freshness_recompute_jobs
+        WHERE bundle_id = ${quoteLiteral(bundleId)}
+          AND status IN ('pending', 'processing')
+      );
+    `);
+  }
+
+  public async claimPendingJobs(): Promise<FreshnessRecomputeJob[]> {
+    const rows = await this.queryRows(`
+      WITH claimed AS (
+        SELECT id
+        FROM freshness_recompute_jobs
+        WHERE status = 'pending'
+        ORDER BY requested_at, id
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE freshness_recompute_jobs AS jobs
+      SET status = 'processing',
+          started_at = NOW()
+      FROM claimed
+      WHERE jobs.id = claimed.id
+      RETURNING jobs.id, jobs.bundle_id;
+    `);
+
+    return rows.flatMap(([id, bundleId]) =>
+      id && bundleId
+        ? [
+            {
+              id,
+              bundleId,
+            },
+          ]
+        : []
+    );
+  }
+
+  public async completeJob(id: string): Promise<void> {
+    await this.execSql(`
+      UPDATE freshness_recompute_jobs
+      SET status = 'completed',
+          completed_at = NOW(),
+          error_text = NULL
+      WHERE id = ${quoteLiteral(id)};
+    `);
+  }
+
+  public async failJob(id: string, errorText: string): Promise<void> {
+    await this.execSql(`
+      UPDATE freshness_recompute_jobs
+      SET status = 'failed',
+          completed_at = NOW(),
+          error_text = ${quoteLiteral(errorText.slice(0, 1000))}
+      WHERE id = ${quoteLiteral(id)};
+    `);
+  }
+
+  private async execSql(sql: string): Promise<void> {
+    await this.runPsql(['-v', 'ON_ERROR_STOP=1'], sql);
+  }
+
+  private async queryRows(sql: string): Promise<string[][]> {
+    const stdout = await this.runPsql(['-v', 'ON_ERROR_STOP=1', '-At', '-F', '\t', '-c', sql]);
+    return stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => line.split('\t'));
+  }
+
+  private async runPsql(args: string[], stdin?: string): Promise<string> {
+    const [command, ...commandArgs] = this.psqlPrefix;
+    if (!command) {
+      throw new Error('Expected a psql command.');
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      const child = spawn(command, [...commandArgs, '-d', this.databaseUrl, ...args], {
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      if (stdin) {
+        child.stdin.end(stdin);
+      } else {
+        child.stdin.end();
+      }
+
+      child.once('error', reject);
+      child.once('exit', (code, signal) => {
+        if (signal) {
+          reject(new Error(`psql terminated with signal ${signal}`));
+          return;
+        }
+
+        if (code !== 0) {
+          reject(new Error(stderr.trim() || `psql exited with code ${code}`));
+          return;
+        }
+
+        resolve(stdout.trim());
+      });
+    });
+  }
+}
 
 function resolveDurablePaths(options: DurableServiceOptions = {}): DurablePaths {
   const cwd = options.cwd ?? process.cwd();
@@ -389,12 +534,19 @@ export class DurableScbsService implements ScbsService {
   private readonly paths: DurablePaths;
   private readonly databaseUrl: string;
   private readonly explicitDatabaseUrl: boolean;
+  private readonly postgresJobs: PostgresFreshnessJobStore | null;
 
   public constructor(options: DurableServiceOptions = {}) {
     this.paths = resolveDurablePaths(options);
     this.explicitDatabaseUrl =
       options.databaseUrl !== undefined || process.env.SCBS_DATABASE_URL !== undefined;
     this.databaseUrl = options.databaseUrl ?? process.env.SCBS_DATABASE_URL ?? DEFAULT_DATABASE_URL;
+    this.postgresJobs =
+      options.databaseUrl !== undefined || process.env.DATABASE_URL !== undefined
+        ? new PostgresFreshnessJobStore(
+            options.databaseUrl ?? process.env.DATABASE_URL ?? this.databaseUrl
+          )
+        : null;
   }
 
   public async init(configPath: string) {
@@ -730,11 +882,13 @@ export class DurableScbsService implements ScbsService {
     if (!backend) {
       return this.withLegacyMutation((service) => service.expireBundle(id));
     }
-    return this.withPostgresMutation(backend, async (store) => {
+    const bundle = await this.withPostgresMutation(backend, async (store) => {
       const bundle = requireById(store.bundles, id, 'Bundle');
       bundle.freshness = 'expired';
       return toBundleRecord(bundle);
     });
+    await this.postgresJobs?.enqueueBundle(bundle.id);
+    return bundle;
   }
 
   public async listBundleCache() {
@@ -782,16 +936,40 @@ export class DurableScbsService implements ScbsService {
     if (!backend) {
       return this.withLegacyMutation((service) => service.recomputeFreshness());
     }
-    return this.withPostgresMutation(backend, async (store) => {
-      let updated = 0;
-      for (const bundle of store.bundles) {
-        if (bundle.freshness !== 'fresh') {
-          bundle.freshness = 'fresh';
-          updated += 1;
+    if (!this.postgresJobs) {
+      return this.withPostgresMutation(backend, async (store) => {
+        let updated = 0;
+        for (const bundle of store.bundles) {
+          if (bundle.freshness !== 'fresh') {
+            bundle.freshness = 'fresh';
+            updated += 1;
+          }
         }
+        return { updated };
+      });
+    }
+
+    const jobs = await this.postgresJobs.claimPendingJobs();
+    let updated = 0;
+    for (const job of jobs) {
+      try {
+        const result = await this.withPostgresMutation(backend, async (store) => {
+          const bundle = requireById(store.bundles, job.bundleId, 'Bundle');
+          if (bundle.freshness !== 'fresh') {
+            bundle.freshness = 'fresh';
+            return { updated: 1 };
+          }
+          return { updated: 0 };
+        });
+        updated += result.updated;
+        await this.postgresJobs.completeJob(job.id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.postgresJobs.failJob(job.id, message);
+        throw error;
       }
-      return { updated };
-    });
+    }
+    return { updated };
   }
 
   public async getFreshnessStatus() {
@@ -800,10 +978,13 @@ export class DurableScbsService implements ScbsService {
       return this.withLegacyService((service) => service.getFreshnessStatus());
     }
     return this.withPostgresService(backend, async (store) => {
-      const staleArtifacts = store.bundles.filter((bundle) => bundle.freshness !== 'fresh').length;
+      let updated = 0;
+      for (const bundle of store.bundles) {
+        if (bundle.freshness !== 'fresh') updated += 1;
+      }
       return {
-        overall: staleArtifacts > 0 ? ('partial' as const) : ('fresh' as const),
-        staleArtifacts,
+        overall: updated > 0 ? ('partial' as const) : ('fresh' as const),
+        staleArtifacts: updated,
       };
     });
   }

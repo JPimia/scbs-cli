@@ -386,9 +386,7 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async expireBundle(id: string) {
-    const bundle = requireById(this.state.bundles, id, 'Bundle');
-    bundle.freshness = 'expired';
-    return bundle;
+    return this.setBundleFreshness(id, 'expired');
   }
 
   public async listBundleCache() {
@@ -410,15 +408,9 @@ export class InMemoryScbsService implements ScbsService {
   }
 
   public async recomputeFreshness() {
-    let updated = 0;
-    for (const bundle of this.state.bundles) {
-      if (bundle.freshness !== 'fresh') {
-        bundle.freshness = 'fresh';
-        updated += 1;
-      }
-    }
-
-    return { updated };
+    return this.recomputeBundles(
+      this.state.bundles.filter((bundle) => bundle.freshness !== 'fresh').map((bundle) => bundle.id)
+    );
   }
 
   public async getFreshnessStatus() {
@@ -462,6 +454,31 @@ export class InMemoryScbsService implements ScbsService {
     const receipt = requireById(this.state.receipts, id, 'Receipt');
     receipt.status = 'rejected';
     return receipt;
+  }
+
+  public async recomputeBundles(bundleIds: string[]) {
+    let updated = 0;
+    for (const bundleId of dedupe(bundleIds)) {
+      const bundle = requireById(this.state.bundles, bundleId, 'Bundle');
+      if (bundle.freshness !== 'fresh') {
+        this.setBundleFreshness(bundleId, 'fresh');
+        updated += 1;
+      }
+    }
+
+    return { updated };
+  }
+
+  private setBundleFreshness(id: string, freshness: FreshnessState) {
+    const bundle = requireById(this.state.bundles, id, 'Bundle');
+    bundle.freshness = freshness;
+    for (const cacheEntry of this.state.bundleCache) {
+      if (cacheEntry.bundleId === id) {
+        cacheEntry.freshness = freshness;
+      }
+    }
+
+    return bundle;
   }
 }
 
