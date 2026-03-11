@@ -205,15 +205,17 @@ export class PostgresSeedStateStore {
       this.queryJson<
         Array<{
           id: string;
+          job_kind: string;
           repo_id: string;
-          event_id: string;
+          event_id: string | null;
+          target_id: string;
           changed_files: unknown;
           status: string;
           created_at: unknown;
           updated_at: unknown;
         }>
       >(
-        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, repo_id, event_id, changed_files, status, created_at, updated_at FROM recompute_jobs) t"
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, job_kind, repo_id, event_id, target_id, changed_files, status, created_at, updated_at FROM recompute_jobs) t"
       ),
     ]);
 
@@ -336,8 +338,13 @@ export class PostgresSeedStateStore {
         (row) =>
           ({
             id: row.id,
+            kind:
+              row.job_kind === 'repo_scan' || row.job_kind === 'receipt_validation'
+                ? row.job_kind
+                : 'freshness_recompute',
             repoId: row.repo_id,
-            eventId: row.event_id,
+            eventId: row.event_id ?? undefined,
+            targetId: row.target_id,
             files: asStringArray(row.changed_files),
             status: row.status === 'completed' ? 'completed' : 'pending',
             createdAt: asTimestamp(row.created_at) ?? now(),
@@ -401,7 +408,7 @@ export class PostgresSeedStateStore {
       ),
       ...state.freshnessJobs.map(
         (job) =>
-          `INSERT INTO recompute_jobs (id, repo_id, event_id, changed_files, status, created_at, updated_at) VALUES (${textLiteral(job.id)}, ${textLiteral(job.repoId)}, ${textLiteral(job.eventId)}, ${jsonbLiteral(job.files)}, ${textLiteral(job.status)}, ${textLiteral(job.createdAt)}, ${textLiteral(job.updatedAt)})`
+          `INSERT INTO recompute_jobs (id, job_kind, repo_id, event_id, target_id, changed_files, status, created_at, updated_at) VALUES (${textLiteral(job.id)}, ${textLiteral(job.kind)}, ${textLiteral(job.repoId)}, ${textLiteral(job.eventId)}, ${textLiteral(job.targetId)}, ${jsonbLiteral(job.files)}, ${textLiteral(job.status)}, ${textLiteral(job.createdAt)}, ${textLiteral(job.updatedAt)})`
       ),
       'COMMIT',
     ];

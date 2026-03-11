@@ -374,7 +374,7 @@ function createDiagnostics(state: SeedState): DoctorReport['diagnostics'] {
     hotspots: {
       staleBundleIds: staleBundles.slice(0, 5).map((bundle) => bundle.id),
       pendingReceiptIds: pendingReceipts.slice(0, 5).map((receipt) => receipt.id),
-      pendingFreshnessJobIds: pendingJobs.slice(0, 5).map((job) => job.id),
+      pendingJobIds: pendingJobs.slice(0, 5).map((job) => job.id),
     },
   };
 }
@@ -383,7 +383,21 @@ export class InMemoryScbsService implements ScbsService {
   private readonly state: SeedState;
 
   public constructor(seedState?: SeedState) {
-    this.state = seedState ?? createSeedState();
+    if (!seedState) {
+      this.state = createSeedState();
+      return;
+    }
+
+    seedState.repos ??= [];
+    seedState.facts ??= [];
+    seedState.claims ??= [];
+    seedState.views ??= [];
+    seedState.bundles ??= [];
+    seedState.receipts ??= [];
+    seedState.bundleCache ??= [];
+    seedState.freshnessEvents ??= [];
+    seedState.freshnessJobs ??= [];
+    this.state = seedState;
   }
 
   public async init(configPath: string): Promise<InitReport> {
@@ -482,10 +496,19 @@ export class InMemoryScbsService implements ScbsService {
     return requireById(this.state.repos, id, 'Repository');
   }
 
-  public async scanRepo(id: string) {
+  public async scanRepo(id: string, options?: { queue?: boolean }) {
     const repo = requireById(this.state.repos, id, 'Repository');
-    repo.status = 'scanned';
-    repo.lastScannedAt = now();
+    const createdAt = now();
+    const job = this.enqueueJob({
+      kind: 'repo_scan',
+      repoId: repo.id,
+      targetId: repo.id,
+      files: [],
+      createdAt,
+    });
+    if (!(options?.queue ?? false)) {
+      await this.runFreshnessWorker({ limit: 1, kinds: ['repo_scan'], jobIds: [job.id] });
+    }
     return repo;
   }
 
@@ -502,8 +525,10 @@ export class InMemoryScbsService implements ScbsService {
     });
     this.state.freshnessJobs.push({
       id: jobId,
+      kind: 'freshness_recompute',
       repoId: input.id,
       eventId,
+      targetId: input.id,
       files: [...input.files],
       status: 'pending',
       createdAt,
@@ -753,32 +778,24 @@ export class InMemoryScbsService implements ScbsService {
     return { updated: report.processed };
   }
 
-  public async runFreshnessWorker(options?: { limit?: number }): Promise<FreshnessWorkerReport> {
+  public async runFreshnessWorker(options?: {
+    limit?: number;
+    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    jobIds?: string[];
+  }): Promise<FreshnessWorkerReport> {
     const limit = options?.limit ?? Number.POSITIVE_INFINITY;
-    const pendingJobs = this.state.freshnessJobs.filter((job) => job.status === 'pending');
+    const kinds = options?.kinds;
+    const explicitJobIds = options?.jobIds;
+    const pendingJobs = this.state.freshnessJobs.filter(
+      (job) =>
+        job.status === 'pending' &&
+        (kinds ? kinds.includes(job.kind) : true) &&
+        (explicitJobIds ? explicitJobIds.includes(job.id) : true)
+    );
     const selectedJobs = pendingJobs.slice(0, Math.max(0, limit));
 
     for (const job of selectedJobs) {
-      for (const claim of this.state.claims) {
-        if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
-          claim.freshness = 'fresh';
-        }
-      }
-
-      for (const view of this.state.views) {
-        if (view.repoId === job.repoId && view.freshness !== 'fresh') {
-          view.freshness = 'fresh';
-        }
-      }
-
-      for (const bundle of this.state.bundles) {
-        if (bundle.repoIds.includes(job.repoId) && bundle.freshness !== 'fresh') {
-          bundle.freshness = 'fresh';
-        }
-      }
-
-      job.status = 'completed';
-      job.updatedAt = now();
+      this.processJob(job);
     }
 
     return {
@@ -831,7 +848,25 @@ export class InMemoryScbsService implements ScbsService {
     return requireById(this.state.receipts, id, 'Receipt');
   }
 
-  public async validateReceipt(id: string) {
+  public async validateReceipt(id: string, options?: { queue?: boolean }) {
+    const receipt = requireById(this.state.receipts, id, 'Receipt') as DurableReceiptRecord;
+    const createdAt = now();
+    const receiptRepoIds = Array.isArray(receipt.repoIds) ? receipt.repoIds : [];
+    const job = this.enqueueJob({
+      kind: 'receipt_validation',
+      repoId: receiptRepoIds[0] ?? this.state.repos[0]?.id ?? 'repo_local-default',
+      targetId: receipt.id,
+      files: [],
+      createdAt,
+    });
+    if (options?.queue ?? false) {
+      return receipt as ReceiptRecord;
+    }
+    await this.runFreshnessWorker({ limit: 1, kinds: ['receipt_validation'], jobIds: [job.id] });
+    return requireById(this.state.receipts, id, 'Receipt');
+  }
+
+  private validateReceiptNow(id: string): ReceiptRecord {
     const receipt = requireById(this.state.receipts, id, 'Receipt') as DurableReceiptRecord;
     const bundle =
       receipt.bundleId === null
@@ -971,6 +1006,60 @@ export class InMemoryScbsService implements ScbsService {
     this.state.views = this.state.views
       .filter((view) => view.repoId !== repoId)
       .concat(repoViews as ViewRecord[]);
+  }
+
+  private enqueueJob(input: {
+    kind: FreshnessJobRecord['kind'];
+    repoId: string;
+    targetId: string;
+    files: string[];
+    createdAt: string;
+    eventId?: string;
+  }): FreshnessJobRecord {
+    const job: FreshnessJobRecord = {
+      id: `job_${slugify(`${input.kind}-${input.targetId}-${input.createdAt}`)}`,
+      kind: input.kind,
+      repoId: input.repoId,
+      eventId: input.eventId,
+      targetId: input.targetId,
+      files: [...input.files],
+      status: 'pending',
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+    };
+    this.state.freshnessJobs.push(job);
+    return job;
+  }
+
+  private processJob(job: FreshnessJobRecord): void {
+    if (job.kind === 'repo_scan') {
+      const repo = requireById(this.state.repos, job.targetId, 'Repository');
+      repo.status = 'scanned';
+      repo.lastScannedAt = now();
+    } else if (job.kind === 'receipt_validation') {
+      this.validateReceiptNow(job.targetId);
+    } else {
+      for (const claim of this.state.claims) {
+        if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
+          claim.freshness = 'fresh';
+        }
+      }
+
+      for (const view of this.state.views) {
+        if (view.repoId === job.repoId && view.freshness !== 'fresh') {
+          view.freshness = 'fresh';
+        }
+      }
+
+      for (const bundle of this.state.bundles) {
+        if (bundle.repoIds.includes(job.repoId) && bundle.freshness !== 'fresh') {
+          bundle.freshness = 'fresh';
+        }
+      }
+    }
+
+    job.status = 'completed';
+    job.updatedAt = now();
   }
 }
 

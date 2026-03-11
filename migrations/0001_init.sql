@@ -140,14 +140,23 @@ CREATE TABLE agent_receipts (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE freshness_recompute_jobs (
+CREATE TABLE freshness_events (
   id TEXT PRIMARY KEY,
-  bundle_id TEXT NOT NULL,
+  repo_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  changed_files JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE recompute_jobs (
+  id TEXT PRIMARY KEY,
+  job_kind TEXT NOT NULL,
+  repo_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  event_id TEXT REFERENCES freshness_events(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  changed_files JSONB NOT NULL,
   status TEXT NOT NULL,
-  requested_at TIMESTAMPTZ NOT NULL,
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  error_text TEXT
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX idx_file_records_repo_id ON file_records (repo_id);
@@ -155,9 +164,8 @@ CREATE INDEX idx_symbol_records_repo_id ON symbol_records (repo_id);
 CREATE INDEX idx_dependency_edges_repo_id ON dependency_edges (repo_id);
 CREATE INDEX idx_fact_records_repo_id ON fact_records (repo_id);
 CREATE INDEX idx_claim_records_repo_id ON claim_records (repo_id);
-CREATE INDEX idx_freshness_recompute_jobs_bundle_id ON freshness_recompute_jobs (bundle_id);
-CREATE INDEX idx_freshness_recompute_jobs_status_requested_at
-  ON freshness_recompute_jobs (status, requested_at);
 CREATE INDEX idx_view_records_repo_id ON view_records (repo_id);
 CREATE INDEX idx_task_bundles_cache_key ON task_bundles (cache_key);
 CREATE INDEX idx_agent_receipts_status ON agent_receipts (status);
+CREATE INDEX idx_freshness_events_repo_id ON freshness_events (repo_id);
+CREATE INDEX idx_recompute_jobs_status ON recompute_jobs (status);

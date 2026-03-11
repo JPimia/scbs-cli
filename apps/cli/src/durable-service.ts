@@ -104,7 +104,7 @@ function createDiagnostics(state: SeedState): DoctorReport['diagnostics'] {
     hotspots: {
       staleBundleIds: staleBundles.slice(0, 5).map((bundle) => bundle.id),
       pendingReceiptIds: pendingReceipts.slice(0, 5).map((receipt) => receipt.id),
-      pendingFreshnessJobIds: pendingJobs.slice(0, 5).map((job) => job.id),
+      pendingJobIds: pendingJobs.slice(0, 5).map((job) => job.id),
     },
   };
 }
@@ -313,8 +313,8 @@ export class DurableScbsService implements ScbsService {
     return this.withService((service) => service.showRepo(id));
   }
 
-  public async scanRepo(id: string) {
-    return this.withMutation((service) => service.scanRepo(id));
+  public async scanRepo(id: string, options?: { queue?: boolean }) {
+    return this.withMutation((service) => service.scanRepo(id, options));
   }
 
   public async reportRepoChanges(input: RepoChangesInput) {
@@ -377,7 +377,11 @@ export class DurableScbsService implements ScbsService {
     return this.withMutation((service) => service.recomputeFreshness());
   }
 
-  public async runFreshnessWorker(options?: { limit?: number }) {
+  public async runFreshnessWorker(options?: {
+    limit?: number;
+    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    jobIds?: string[];
+  }) {
     return this.withMutation((service) => service.runFreshnessWorker(options));
   }
 
@@ -397,8 +401,8 @@ export class DurableScbsService implements ScbsService {
     return this.withService((service) => service.showReceipt(id));
   }
 
-  public async validateReceipt(id: string) {
-    return this.withMutation((service) => service.validateReceipt(id));
+  public async validateReceipt(id: string, options?: { queue?: boolean }) {
+    return this.withMutation((service) => service.validateReceipt(id, options));
   }
 
   public async rejectReceipt(id: string) {

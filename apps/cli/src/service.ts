@@ -57,7 +57,7 @@ export interface ScbsService {
   registerRepo(input: RegisterRepoInput): Promise<RepoRecord>;
   listRepos(): Promise<RepoRecord[]>;
   showRepo(id: string): Promise<RepoRecord>;
-  scanRepo(id: string): Promise<RepoRecord>;
+  scanRepo(id: string, options?: { queue?: boolean }): Promise<RepoRecord>;
   reportRepoChanges(
     input: RepoChangesInput
   ): Promise<{ repoId: string; files: string[]; impacts: number }>;
@@ -75,12 +75,16 @@ export interface ScbsService {
   clearBundleCache(): Promise<{ cleared: number }>;
   getFreshnessImpacts(): Promise<FreshnessImpact[]>;
   recomputeFreshness(): Promise<{ updated: number }>;
-  runFreshnessWorker(options?: { limit?: number }): Promise<FreshnessWorkerReport>;
+  runFreshnessWorker(options?: {
+    limit?: number;
+    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    jobIds?: string[];
+  }): Promise<FreshnessWorkerReport>;
   getFreshnessStatus(): Promise<{ overall: FreshnessState; staleArtifacts: number }>;
   submitReceipt(input: ReceiptSubmitInput): Promise<ReceiptRecord>;
   listReceipts(): Promise<ReceiptRecord[]>;
   showReceipt(id: string): Promise<ReceiptRecord>;
-  validateReceipt(id: string): Promise<ReceiptRecord>;
+  validateReceipt(id: string, options?: { queue?: boolean }): Promise<ReceiptRecord>;
   rejectReceipt(id: string): Promise<ReceiptRecord>;
 }
 

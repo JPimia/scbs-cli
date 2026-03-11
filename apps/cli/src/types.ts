@@ -104,8 +104,10 @@ export interface FreshnessEventRecord {
 
 export interface FreshnessJobRecord {
   id: string;
+  kind: 'freshness_recompute' | 'repo_scan' | 'receipt_validation';
   repoId: string;
-  eventId: string;
+  eventId?: string;
+  targetId: string;
   files: string[];
   status: 'pending' | 'completed';
   createdAt: string;
@@ -156,7 +158,7 @@ export interface DoctorReport {
     hotspots: {
       staleBundleIds: string[];
       pendingReceiptIds: string[];
-      pendingFreshnessJobIds: string[];
+      pendingJobIds: string[];
     };
   };
   checks: Array<{

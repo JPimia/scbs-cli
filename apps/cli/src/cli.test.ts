@@ -40,6 +40,97 @@ describe('CLI parsing', () => {
     });
   });
 
+  it('queues repo scans and receipt validation for the worker when requested', async () => {
+    const repoId = 'repo_queue';
+    const service = new InMemoryScbsService({
+      repos: [
+        {
+          id: repoId,
+          name: 'queue',
+          path: '.',
+          status: 'registered',
+          lastScannedAt: null,
+        },
+      ],
+      facts: [],
+      claims: [],
+      views: [],
+      bundles: [
+        {
+          id: 'bundle_queue',
+          repoIds: [repoId],
+          task: 'queued',
+          viewIds: [],
+          freshness: 'fresh',
+          fileScope: ['src/index.ts'],
+          symbolScope: [],
+        },
+      ],
+      receipts: [
+        {
+          id: 'receipt_queue',
+          bundleId: 'bundle_queue',
+          agent: 'agent',
+          summary: 'queued validation',
+          status: 'pending',
+          repoIds: [repoId],
+          type: 'workflow_note',
+          fromRole: 'agent',
+          payload: {},
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      bundleCache: [],
+      freshnessEvents: [],
+      freshnessJobs: [],
+    } as unknown as SeedState);
+
+    const queuedScan = await runCli(['repo', 'scan', repoId, '--queue', '--json'], service);
+    expect(queuedScan.exitCode).toBe(0);
+    expect(JSON.parse(queuedScan.stdout)).toMatchObject({
+      data: {
+        id: repoId,
+        status: 'registered',
+      },
+    });
+
+    const queuedReceipt = await runCli(
+      ['receipt', 'validate', 'receipt_queue', '--queue', '--json'],
+      service
+    );
+    expect(queuedReceipt.exitCode).toBe(0);
+    expect(JSON.parse(queuedReceipt.stdout)).toMatchObject({
+      data: {
+        id: 'receipt_queue',
+        status: 'pending',
+      },
+    });
+
+    const queuedDoctor = await runCli(['doctor', '--json'], service);
+    expect(JSON.parse(queuedDoctor.stdout)).toMatchObject({
+      data: {
+        diagnostics: {
+          freshness: {
+            pendingJobs: 2,
+          },
+        },
+      },
+    });
+
+    const worker = await runCli(['freshness', 'worker', '--json'], service);
+    expect(worker.exitCode).toBe(0);
+    expect(JSON.parse(worker.stdout)).toMatchObject({
+      data: {
+        processed: 2,
+        remaining: 0,
+      },
+    });
+
+    expect((await service.showRepo(repoId)).status).toBe('scanned');
+    expect((await service.showReceipt('receipt_queue')).status).toBe('validated');
+  });
+
   it('surfaces the operator-facing live API contract for serve', async () => {
     const result = await runCli(['serve', '--json'], new InMemoryScbsService());
 

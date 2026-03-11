@@ -9,7 +9,7 @@ import type {
 
 interface OptionDefinition {
   name: string;
-  type: 'string' | 'csv';
+  type: 'string' | 'csv' | 'boolean';
   required?: boolean;
 }
 
@@ -31,11 +31,11 @@ type ParsedInput =
       json: boolean;
       definition: CommandDefinition;
       commandName: string;
-      values: Record<string, string | string[]>;
+      values: Record<string, string | string[] | boolean>;
     };
 
 interface CommandContext {
-  values: Record<string, string | string[]>;
+  values: Record<string, string | string[] | boolean>;
   service: ScbsService;
 }
 
@@ -93,7 +93,11 @@ const commandDefinitions: CommandDefinition[] = [
     path: ['repo', 'scan'],
     description: 'Scan a repository',
     positionals: ['id'],
-    run: ({ service, values }) => service.scanRepo(getRequiredString(values, 'id')),
+    options: [{ name: 'queue', type: 'boolean' }],
+    run: ({ service, values }) =>
+      service.scanRepo(getRequiredString(values, 'id'), {
+        queue: getOptionalBoolean(values, 'queue') ?? false,
+      }),
   },
   {
     path: ['repo', 'changes'],
@@ -240,7 +244,11 @@ const commandDefinitions: CommandDefinition[] = [
     path: ['receipt', 'validate'],
     description: 'Validate a receipt',
     positionals: ['id'],
-    run: ({ service, values }) => service.validateReceipt(getRequiredString(values, 'id')),
+    options: [{ name: 'queue', type: 'boolean' }],
+    run: ({ service, values }) =>
+      service.validateReceipt(getRequiredString(values, 'id'), {
+        queue: getOptionalBoolean(values, 'queue') ?? false,
+      }),
   },
   {
     path: ['receipt', 'reject'],
@@ -304,8 +312,8 @@ const matchDefinition = (argv: string[]): CommandDefinition | undefined =>
 const parseValues = (
   remaining: string[],
   definition: CommandDefinition
-): Record<string, string | string[]> => {
-  const values: Record<string, string | string[]> = {};
+): Record<string, string | string[] | boolean> => {
+  const values: Record<string, string | string[] | boolean> = {};
   const positionals = definition.positionals ?? [];
   let index = 0;
 
@@ -331,11 +339,16 @@ const parseValues = (
       throw new Error(`Unknown option "${token}".`);
     }
 
+    if (option.type === 'boolean') {
+      values[option.name] = true;
+      index += 1;
+      continue;
+    }
+
     const optionValue = remaining[index + 1];
     if (!optionValue || optionValue.startsWith('--')) {
       throw new Error(`Option "${token}" requires a value.`);
     }
-
     values[option.name] =
       option.type === 'csv'
         ? optionValue
@@ -355,7 +368,7 @@ const parseValues = (
   return values;
 };
 
-const asString = (value: string | string[]): string => {
+const asString = (value: string | string[] | boolean): string => {
   if (typeof value !== 'string') {
     throw new Error('Expected a string value.');
   }
@@ -363,15 +376,22 @@ const asString = (value: string | string[]): string => {
   return value;
 };
 
-const asCsv = (value: string | string[]): string[] => {
+const asCsv = (value: string | string[] | boolean): string[] => {
   if (Array.isArray(value)) {
     return value;
+  }
+
+  if (typeof value === 'boolean') {
+    throw new Error('Expected a csv value.');
   }
 
   return [value];
 };
 
-const getRequiredString = (values: Record<string, string | string[]>, key: string): string => {
+const getRequiredString = (
+  values: Record<string, string | string[] | boolean>,
+  key: string
+): string => {
   const value = values[key];
   if (value === undefined) {
     throw new Error(`Missing value "${key}".`);
@@ -380,7 +400,10 @@ const getRequiredString = (values: Record<string, string | string[]>, key: strin
   return asString(value);
 };
 
-const getRequiredCsv = (values: Record<string, string | string[]>, key: string): string[] => {
+const getRequiredCsv = (
+  values: Record<string, string | string[] | boolean>,
+  key: string
+): string[] => {
   const value = values[key];
   if (value === undefined) {
     throw new Error(`Missing value "${key}".`);
@@ -390,7 +413,7 @@ const getRequiredCsv = (values: Record<string, string | string[]>, key: string):
 };
 
 const getOptionalString = (
-  values: Record<string, string | string[]>,
+  values: Record<string, string | string[] | boolean>,
   key: string
 ): string | undefined => {
   const value = values[key];
@@ -398,9 +421,23 @@ const getOptionalString = (
 };
 
 const getOptionalCsv = (
-  values: Record<string, string | string[]>,
+  values: Record<string, string | string[] | boolean>,
   key: string
 ): string[] | undefined => {
   const value = values[key];
   return value === undefined ? undefined : asCsv(value);
+};
+
+const getOptionalBoolean = (
+  values: Record<string, string | string[] | boolean>,
+  key: string
+): boolean | undefined => {
+  const value = values[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`Expected "${key}" to be a boolean flag.`);
+  }
+  return value;
 };
