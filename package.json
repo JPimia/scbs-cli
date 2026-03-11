@@ -11,9 +11,16 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "build": "bun run --cwd apps/cli build",
+    "ci": "bun run verify:ci",
     "lint": "biome check .",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
+    "test:packages": "bun scripts/run-package-checks.ts test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "bun scripts/run-verification.ts local",
+    "verify:ci": "bun scripts/run-verification.ts ci",
+    "verify:migrations": "bun scripts/verify-postgres.ts",
+    "verify:openapi": "bun scripts/verify-openapi.ts",
+    "verify:postgres": "bun scripts/verify-postgres.ts",
     "cli": "bun run --cwd apps/cli dev --"
   },
   "devDependencies": {
