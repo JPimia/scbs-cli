@@ -26,15 +26,18 @@ import type {
   FactRecord,
   FreshnessEventRecord,
   FreshnessImpact,
+  FreshnessJobKind,
   FreshnessJobRecord,
   FreshnessState,
   FreshnessWorkerReport,
   InitReport,
+  JobListReport,
   MigrationReport,
   ReceiptRecord,
   RepoRecord,
   ServeReport,
   ViewRecord,
+  WorkerLoopReport,
 } from './types';
 
 export interface SeedState {
@@ -379,6 +382,50 @@ function createDiagnostics(state: SeedState): DoctorReport['diagnostics'] {
   };
 }
 
+function createJobSummary(state: SeedState): JobListReport['summary'] {
+  const summary: JobListReport['summary'] = {
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+  };
+  for (const job of state.freshnessJobs) {
+    if (job.status === 'pending') {
+      summary.pending += 1;
+    } else if (job.status === 'running') {
+      summary.running += 1;
+    } else if (job.status === 'completed') {
+      summary.completed += 1;
+    } else {
+      summary.failed += 1;
+    }
+  }
+  return summary;
+}
+
+function createJobReport(state: SeedState): JobListReport {
+  const pendingReceipts = state.receipts
+    .filter((receipt) => receipt.status === 'pending')
+    .map((receipt) => receipt.id);
+
+  return {
+    summary: createJobSummary(state),
+    jobs: [...state.freshnessJobs].sort((left, right) =>
+      left.createdAt === right.createdAt
+        ? left.id.localeCompare(right.id)
+        : left.createdAt.localeCompare(right.createdAt)
+    ),
+    recentEvents: [...state.freshnessEvents]
+      .sort((left, right) =>
+        left.createdAt === right.createdAt
+          ? left.id.localeCompare(right.id)
+          : right.createdAt.localeCompare(left.createdAt)
+      )
+      .slice(0, 20),
+    pendingReceiptIds: pendingReceipts.slice(0, 20),
+  };
+}
+
 export class InMemoryScbsService implements ScbsService {
   private readonly state: SeedState;
 
@@ -463,6 +510,33 @@ export class InMemoryScbsService implements ScbsService {
     };
   }
 
+  public async listJobs(): Promise<JobListReport> {
+    return createJobReport(this.state);
+  }
+
+  public async showJob(id: string): Promise<FreshnessJobRecord> {
+    return requireById(this.state.freshnessJobs, id, 'Job');
+  }
+
+  public async retryJob(id: string): Promise<FreshnessJobRecord> {
+    const job = requireById(this.state.freshnessJobs, id, 'Job');
+    if (job.status === 'running') {
+      throw new Error(`Job "${id}" is currently running.`);
+    }
+    if (job.status === 'completed') {
+      return job;
+    }
+
+    const timestamp = now();
+    job.status = 'pending';
+    job.availableAt = timestamp;
+    job.updatedAt = timestamp;
+    job.startedAt = undefined;
+    job.completedAt = undefined;
+    job.lastError = undefined;
+    return job;
+  }
+
   public async migrate(): Promise<MigrationReport> {
     return {
       adapter: 'local-json',
@@ -531,6 +605,9 @@ export class InMemoryScbsService implements ScbsService {
       targetId: input.id,
       files: [...input.files],
       status: 'pending',
+      attempts: 0,
+      maxAttempts: 3,
+      availableAt: createdAt,
       createdAt,
       updatedAt: createdAt,
     });
@@ -780,28 +857,78 @@ export class InMemoryScbsService implements ScbsService {
 
   public async runFreshnessWorker(options?: {
     limit?: number;
-    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    kinds?: FreshnessJobKind[];
     jobIds?: string[];
   }): Promise<FreshnessWorkerReport> {
     const limit = options?.limit ?? Number.POSITIVE_INFINITY;
     const kinds = options?.kinds;
     const explicitJobIds = options?.jobIds;
+    const startedAt = now();
     const pendingJobs = this.state.freshnessJobs.filter(
       (job) =>
         job.status === 'pending' &&
+        job.availableAt <= startedAt &&
         (kinds ? kinds.includes(job.kind) : true) &&
         (explicitJobIds ? explicitJobIds.includes(job.id) : true)
     );
     const selectedJobs = pendingJobs.slice(0, Math.max(0, limit));
+    const failedJobIds: string[] = [];
 
     for (const job of selectedJobs) {
-      this.processJob(job);
+      if (!this.processJob(job)) {
+        failedJobIds.push(job.id);
+      }
     }
 
     return {
       processed: selectedJobs.length,
       remaining: this.state.freshnessJobs.filter((job) => job.status === 'pending').length,
       jobIds: selectedJobs.map((job) => job.id),
+      failedJobIds,
+    };
+  }
+
+  public async runWorkerLoop(options?: {
+    pollIntervalMs?: number;
+    maxIdleCycles?: number;
+    limit?: number;
+    kinds?: FreshnessJobKind[];
+  }): Promise<WorkerLoopReport> {
+    const pollIntervalMs = Math.max(10, options?.pollIntervalMs ?? 1000);
+    const maxIdleCycles = options?.maxIdleCycles;
+    let cycles = 0;
+    let idleCycles = 0;
+    let processed = 0;
+    let failed = 0;
+
+    while (maxIdleCycles === undefined || idleCycles < maxIdleCycles) {
+      const result = await this.runFreshnessWorker({
+        limit: options?.limit,
+        kinds: options?.kinds,
+      });
+      cycles += 1;
+      processed += result.processed;
+      failed += result.failedJobIds.length;
+
+      if (result.processed === 0) {
+        idleCycles += 1;
+      } else {
+        idleCycles = 0;
+      }
+
+      if (maxIdleCycles !== undefined && idleCycles >= maxIdleCycles) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    return {
+      cycles,
+      processed,
+      idleCycles,
+      remaining: this.state.freshnessJobs.filter((job) => job.status === 'pending').length,
+      failed,
     };
   }
 
@@ -1024,6 +1151,9 @@ export class InMemoryScbsService implements ScbsService {
       targetId: input.targetId,
       files: [...input.files],
       status: 'pending',
+      attempts: 0,
+      maxAttempts: 3,
+      availableAt: input.createdAt,
       createdAt: input.createdAt,
       updatedAt: input.createdAt,
     };
@@ -1031,35 +1161,61 @@ export class InMemoryScbsService implements ScbsService {
     return job;
   }
 
-  private processJob(job: FreshnessJobRecord): void {
-    if (job.kind === 'repo_scan') {
-      const repo = requireById(this.state.repos, job.targetId, 'Repository');
-      repo.status = 'scanned';
-      repo.lastScannedAt = now();
-    } else if (job.kind === 'receipt_validation') {
-      this.validateReceiptNow(job.targetId);
-    } else {
-      for (const claim of this.state.claims) {
-        if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
-          claim.freshness = 'fresh';
+  private processJob(job: FreshnessJobRecord): boolean {
+    const startedAt = now();
+    job.status = 'running';
+    job.startedAt = startedAt;
+    job.updatedAt = startedAt;
+    job.lastError = undefined;
+
+    try {
+      if (job.kind === 'repo_scan') {
+        const repo = requireById(this.state.repos, job.targetId, 'Repository');
+        repo.status = 'scanned';
+        repo.lastScannedAt = now();
+      } else if (job.kind === 'receipt_validation') {
+        this.validateReceiptNow(job.targetId);
+      } else {
+        for (const claim of this.state.claims) {
+          if (claim.repoId === job.repoId && claim.freshness !== 'fresh') {
+            claim.freshness = 'fresh';
+          }
+        }
+
+        for (const view of this.state.views) {
+          if (view.repoId === job.repoId && view.freshness !== 'fresh') {
+            view.freshness = 'fresh';
+          }
+        }
+
+        for (const bundle of this.state.bundles) {
+          if (bundle.repoIds.includes(job.repoId) && bundle.freshness !== 'fresh') {
+            bundle.freshness = 'fresh';
+          }
         }
       }
 
-      for (const view of this.state.views) {
-        if (view.repoId === job.repoId && view.freshness !== 'fresh') {
-          view.freshness = 'fresh';
-        }
+      const completedAt = now();
+      job.status = 'completed';
+      job.completedAt = completedAt;
+      job.updatedAt = completedAt;
+      return true;
+    } catch (error) {
+      const failedAt = now();
+      job.attempts += 1;
+      job.updatedAt = failedAt;
+      job.completedAt = undefined;
+      job.lastError = error instanceof Error ? error.message : 'Unknown job failure';
+      if (job.attempts >= job.maxAttempts) {
+        job.status = 'failed';
+      } else {
+        job.status = 'pending';
+        job.availableAt = new Date(
+          Date.now() + Math.min(1000 * 2 ** (job.attempts - 1), 30000)
+        ).toISOString();
       }
-
-      for (const bundle of this.state.bundles) {
-        if (bundle.repoIds.includes(job.repoId) && bundle.freshness !== 'fresh') {
-          bundle.freshness = 'fresh';
-        }
-      }
+      return false;
     }
-
-    job.status = 'completed';
-    job.updatedAt = now();
   }
 }
 

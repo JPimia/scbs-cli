@@ -10,7 +10,9 @@ import { createScbsHttpServer } from './server';
 import type {
   BundlePlanInput,
   ClaimRecord,
+  DoctorReport,
   FactRecord,
+  FreshnessJobRecord,
   ReceiptSubmitInput,
   RepoRecord,
   ServeReport,
@@ -99,6 +101,86 @@ class StubService implements ServerScbsService {
 
   public async health() {
     return { status: 'ok' as const, service: 'scbs', version: '0.1.0' };
+  }
+
+  public async doctor(): Promise<DoctorReport> {
+    return {
+      status: 'ok',
+      summary: 'SCBS diagnostics are healthy.',
+      api: report.api,
+      storage: report.storage,
+      diagnostics: {
+        artifacts: {
+          repos: 1,
+          facts: 1,
+          claims: 2,
+          views: 2,
+          bundles: 1,
+          cachedBundles: 1,
+          receipts: 1,
+        },
+        freshness: {
+          overall: 'partial',
+          staleArtifacts: 1,
+          pendingJobs: 1,
+          completedJobs: 1,
+          recentEvents: 1,
+        },
+        receipts: {
+          pending: 1,
+          validated: 1,
+          rejected: 0,
+        },
+        hotspots: {
+          staleBundleIds: ['bundle_bootstrap'],
+          pendingReceiptIds: ['receipt_1'],
+          pendingJobIds: ['job_1'],
+        },
+      },
+      checks: [{ name: 'storage', status: 'ok', detail: 'Storage is ready.' }],
+    };
+  }
+
+  public async listJobs() {
+    return {
+      summary: {
+        pending: 1,
+        running: 0,
+        completed: 1,
+        failed: 0,
+      },
+      jobs: [await this.showJob('job_1')],
+      recentEvents: [
+        {
+          id: 'evt_1',
+          repoId: 'repo_local-default',
+          files: ['src/index.ts'],
+          createdAt: '2026-03-11T00:00:00.000Z',
+        },
+      ],
+      pendingReceiptIds: ['receipt_1'],
+    };
+  }
+
+  public async showJob(id: string): Promise<FreshnessJobRecord> {
+    return {
+      id,
+      kind: 'receipt_validation',
+      repoId: 'repo_local-default',
+      eventId: 'evt_1',
+      targetId: 'receipt_1',
+      files: [],
+      status: 'pending',
+      attempts: 1,
+      maxAttempts: 3,
+      availableAt: '2026-03-11T00:00:00.000Z',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      updatedAt: '2026-03-11T00:00:00.000Z',
+    };
+  }
+
+  public async retryJob(id: string): Promise<FreshnessJobRecord> {
+    return { ...(await this.showJob(id)), attempts: 0, lastError: undefined };
   }
 
   public async registerRepo(input: { name: string; path: string }) {
@@ -241,6 +323,10 @@ class StubService implements ServerScbsService {
     return { updated: 2 };
   }
 
+  public async runFreshnessWorker() {
+    return { processed: 1, remaining: 0, jobIds: ['job_1'], failedJobIds: [] };
+  }
+
   public async submitReceipt(input: ReceiptSubmitInput) {
     this.lastSubmittedReceiptInput = input;
 
@@ -346,7 +432,7 @@ describe('server contract', () => {
     const document = buildOpenApiDocument();
     const operations = Object.values(document.paths).flatMap((pathItem) => Object.keys(pathItem));
 
-    expect(routeManifest).toHaveLength(31);
+    expect(routeManifest).toHaveLength(36);
     expect(operations).toHaveLength(routeManifest.length);
     expect(document.paths['/api/v1/claims']?.get).toMatchObject({
       operationId: 'listClaims',
@@ -404,6 +490,9 @@ describe('server contract', () => {
     await expect(indexResponse.json()).resolves.toMatchObject({
       service: 'scbs',
       endpoints: {
+        adminDiagnostics: '/api/v1/admin/diagnostics',
+        listJobs: '/api/v1/admin/jobs',
+        runWorker: '/api/v1/admin/worker/drain',
         listRepos: '/api/v1/repos',
         registerRepo: '/api/v1/repos/register',
         showRepo: '/api/v1/repos/:id',
@@ -468,6 +557,45 @@ describe('server contract', () => {
       id: 'bundle_bootstrap-context',
       requestId: 'req_bootstrap-context',
       repoIds: ['repo_local-default'],
+    });
+
+    const diagnosticsResponse = await fetch(`${baseUrl}/api/v1/admin/diagnostics`);
+    expect(diagnosticsResponse.status).toBe(200);
+    await expect(diagnosticsResponse.json()).resolves.toMatchObject({
+      status: 'ok',
+      diagnostics: {
+        freshness: {
+          pendingJobs: 1,
+        },
+      },
+    });
+
+    const jobsResponse = await fetch(`${baseUrl}/api/v1/admin/jobs`);
+    expect(jobsResponse.status).toBe(200);
+    await expect(jobsResponse.json()).resolves.toMatchObject({
+      summary: {
+        pending: 1,
+      },
+      jobs: [
+        {
+          id: 'job_1',
+          kind: 'receipt_validation',
+        },
+      ],
+    });
+
+    const drainResponse = await fetch(`${baseUrl}/api/v1/admin/worker/drain`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ limit: 1, kinds: ['receipt_validation'] }),
+    });
+    expect(drainResponse.status).toBe(200);
+    await expect(drainResponse.json()).resolves.toMatchObject({
+      processed: 1,
+      remaining: 0,
+      failedJobIds: [],
     });
 
     const methodNotAllowed = await fetch(`${baseUrl}/api/v1/receipts/receipt_1/validate`);

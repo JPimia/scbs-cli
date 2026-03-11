@@ -61,6 +61,28 @@ const commandDefinitions: CommandDefinition[] = [
     run: ({ service }) => service.doctor(),
   },
   {
+    path: ['admin', 'diagnostics'],
+    description: 'Show operator diagnostics',
+    run: ({ service }) => service.doctor(),
+  },
+  {
+    path: ['admin', 'jobs', 'list'],
+    description: 'List queued jobs and recent events',
+    run: ({ service }) => service.listJobs(),
+  },
+  {
+    path: ['admin', 'jobs', 'show'],
+    description: 'Show a queued job',
+    positionals: ['id'],
+    run: ({ service, values }) => service.showJob(getRequiredString(values, 'id')),
+  },
+  {
+    path: ['admin', 'jobs', 'retry'],
+    description: 'Retry a failed or pending job immediately',
+    positionals: ['id'],
+    run: ({ service, values }) => service.retryJob(getRequiredString(values, 'id')),
+  },
+  {
     path: ['migrate'],
     description: 'Run migrations',
     run: ({ service }) => service.migrate(),
@@ -202,12 +224,34 @@ const commandDefinitions: CommandDefinition[] = [
   },
   {
     path: ['freshness', 'worker'],
-    description: 'Drain queued freshness recompute jobs',
-    options: [{ name: 'limit', type: 'string' }],
+    description: 'Drain queued jobs or run a persistent worker loop',
+    options: [
+      { name: 'limit', type: 'string' },
+      { name: 'kind', type: 'csv' },
+      { name: 'watch', type: 'boolean' },
+      { name: 'poll-interval-ms', type: 'string' },
+      { name: 'max-idle-cycles', type: 'string' },
+    ],
     run: ({ service, values }) =>
-      service.runFreshnessWorker({
-        limit: values.limit ? Number(getRequiredString(values, 'limit')) : undefined,
-      }),
+      getOptionalBoolean(values, 'watch')
+        ? service.runWorkerLoop({
+            limit: values.limit ? Number(getRequiredString(values, 'limit')) : undefined,
+            kinds: getOptionalCsv(values, 'kind') as
+              | Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>
+              | undefined,
+            pollIntervalMs: values['poll-interval-ms']
+              ? Number(getRequiredString(values, 'poll-interval-ms'))
+              : undefined,
+            maxIdleCycles: values['max-idle-cycles']
+              ? Number(getRequiredString(values, 'max-idle-cycles'))
+              : undefined,
+          })
+        : service.runFreshnessWorker({
+            limit: values.limit ? Number(getRequiredString(values, 'limit')) : undefined,
+            kinds: getOptionalCsv(values, 'kind') as
+              | Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>
+              | undefined,
+          }),
   },
   {
     path: ['freshness', 'status'],

@@ -211,11 +211,17 @@ export class PostgresSeedStateStore {
           target_id: string;
           changed_files: unknown;
           status: string;
+          attempt_count: number;
+          max_attempts: number;
+          available_at: unknown;
           created_at: unknown;
           updated_at: unknown;
+          started_at: unknown;
+          completed_at: unknown;
+          last_error: string | null;
         }>
       >(
-        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, job_kind, repo_id, event_id, target_id, changed_files, status, created_at, updated_at FROM recompute_jobs) t"
+        "SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at, t.id), '[]'::json) FROM (SELECT id, job_kind, repo_id, event_id, target_id, changed_files, status, attempt_count, max_attempts, available_at, created_at, updated_at, started_at, completed_at, last_error FROM recompute_jobs) t"
       ),
     ]);
 
@@ -346,9 +352,18 @@ export class PostgresSeedStateStore {
             eventId: row.event_id ?? undefined,
             targetId: row.target_id,
             files: asStringArray(row.changed_files),
-            status: row.status === 'completed' ? 'completed' : 'pending',
+            status:
+              row.status === 'running' || row.status === 'completed' || row.status === 'failed'
+                ? row.status
+                : 'pending',
+            attempts: Number.isFinite(row.attempt_count) ? row.attempt_count : 0,
+            maxAttempts: Number.isFinite(row.max_attempts) ? row.max_attempts : 3,
+            availableAt: asTimestamp(row.available_at) ?? asTimestamp(row.created_at) ?? now(),
             createdAt: asTimestamp(row.created_at) ?? now(),
             updatedAt: asTimestamp(row.updated_at) ?? now(),
+            startedAt: asTimestamp(row.started_at),
+            completedAt: asTimestamp(row.completed_at),
+            lastError: row.last_error ?? undefined,
           }) satisfies FreshnessJobRecord
       ),
     };
@@ -408,7 +423,7 @@ export class PostgresSeedStateStore {
       ),
       ...state.freshnessJobs.map(
         (job) =>
-          `INSERT INTO recompute_jobs (id, job_kind, repo_id, event_id, target_id, changed_files, status, created_at, updated_at) VALUES (${textLiteral(job.id)}, ${textLiteral(job.kind)}, ${textLiteral(job.repoId)}, ${textLiteral(job.eventId)}, ${textLiteral(job.targetId)}, ${jsonbLiteral(job.files)}, ${textLiteral(job.status)}, ${textLiteral(job.createdAt)}, ${textLiteral(job.updatedAt)})`
+          `INSERT INTO recompute_jobs (id, job_kind, repo_id, event_id, target_id, changed_files, status, attempt_count, max_attempts, available_at, created_at, updated_at, started_at, completed_at, last_error) VALUES (${textLiteral(job.id)}, ${textLiteral(job.kind)}, ${textLiteral(job.repoId)}, ${textLiteral(job.eventId)}, ${textLiteral(job.targetId)}, ${jsonbLiteral(job.files)}, ${textLiteral(job.status)}, ${job.attempts}, ${job.maxAttempts}, ${textLiteral(job.availableAt)}, ${textLiteral(job.createdAt)}, ${textLiteral(job.updatedAt)}, ${textLiteral(job.startedAt)}, ${textLiteral(job.completedAt)}, ${textLiteral(job.lastError)})`
       ),
       'COMMIT',
     ];
@@ -448,6 +463,32 @@ export class PostgresSeedStateStore {
         await this.exec(['-c', statement]);
       }
     }
+
+    await this.exec([
+      '-c',
+      'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0',
+    ]);
+    await this.exec([
+      '-c',
+      'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3',
+    ]);
+    await this.exec([
+      '-c',
+      'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ',
+    ]);
+    await this.exec([
+      '-c',
+      'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ',
+    ]);
+    await this.exec([
+      '-c',
+      'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ',
+    ]);
+    await this.exec(['-c', 'ALTER TABLE recompute_jobs ADD COLUMN IF NOT EXISTS last_error TEXT']);
+    await this.exec([
+      '-c',
+      'UPDATE recompute_jobs SET available_at = COALESCE(available_at, created_at) WHERE available_at IS NULL',
+    ]);
 
     this.schemaReady = true;
     return !schemaExists;

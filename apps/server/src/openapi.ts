@@ -28,6 +28,8 @@ function schemaNameFor(type: string): string {
       return 'HealthResponse';
     case 'apiIndex':
       return 'ApiIndexResponse';
+    case 'doctorReport':
+      return 'DoctorReport';
     case 'repoRecord':
       return 'RepoRecord';
     case 'repoList':
@@ -58,6 +60,12 @@ function schemaNameFor(type: string): string {
       return 'FreshnessStatusResponse';
     case 'recomputeFreshnessResult':
       return 'RecomputeFreshnessResult';
+    case 'workerRunReport':
+      return 'WorkerRunReport';
+    case 'jobRecord':
+      return 'JobRecord';
+    case 'jobList':
+      return 'JobListReport';
     case 'receiptRecord':
       return 'ReceiptRecord';
     case 'receiptList':
@@ -72,6 +80,10 @@ function schemaNameFor(type: string): string {
       return 'BundlePlanInput';
     case 'registerRepoInput':
       return 'RegisterRepoInput';
+    case 'queueControlInput':
+      return 'QueueControlInput';
+    case 'workerDrainInput':
+      return 'WorkerDrainInput';
     case 'repoChangesInput':
       return 'RepoChangesInput';
     case 'receiptSubmitInput':
@@ -139,7 +151,13 @@ export function buildOpenApiDocument() {
         'First-class server-owned HTTP contract for the Shared Context Build System versioned v1 API.',
     },
     servers: [{ url: 'http://127.0.0.1:8791' }],
-    tags: [{ name: 'System' }, { name: 'Bundles' }, { name: 'Freshness' }, { name: 'Receipts' }],
+    tags: [
+      { name: 'System' },
+      { name: 'Admin' },
+      { name: 'Bundles' },
+      { name: 'Freshness' },
+      { name: 'Receipts' },
+    ],
     paths,
     components: {
       schemas: buildComponentSchemas(),
@@ -187,6 +205,31 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
         version: { type: 'string' },
       },
     },
+    QueueControlInput: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        queue: { type: 'boolean' },
+      },
+    },
+    WorkerDrainInput: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'number' },
+        kinds: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['freshness_recompute', 'repo_scan', 'receipt_validation'],
+          },
+        },
+        jobIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    },
     ApiIndexResponse: {
       type: 'object',
       additionalProperties: false,
@@ -201,6 +244,11 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           required: [
             'health',
             'root',
+            'adminDiagnostics',
+            'listJobs',
+            'showJob',
+            'retryJob',
+            'runWorker',
             'listRepos',
             'registerRepo',
             'showRepo',
@@ -233,6 +281,11 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
           properties: {
             health: { type: 'string' },
             root: { type: 'string' },
+            adminDiagnostics: { type: 'string' },
+            listJobs: { type: 'string' },
+            showJob: { type: 'string' },
+            retryJob: { type: 'string' },
+            runWorker: { type: 'string' },
             listRepos: { type: 'string' },
             registerRepo: { type: 'string' },
             showRepo: { type: 'string' },
@@ -603,6 +656,175 @@ function buildComponentSchemas(): Record<string, JsonSchema> {
       required: ['updated'],
       properties: {
         updated: { type: 'integer', minimum: 0 },
+      },
+    },
+    DoctorCheck: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'status', 'detail'],
+      properties: {
+        name: { type: 'string' },
+        status: { type: 'string', enum: ['ok', 'warn'] },
+        detail: { type: 'string' },
+      },
+    },
+    DoctorDiagnostics: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['artifacts', 'freshness', 'receipts', 'hotspots'],
+      properties: {
+        artifacts: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['repos', 'facts', 'claims', 'views', 'bundles', 'cachedBundles', 'receipts'],
+          properties: {
+            repos: { type: 'number' },
+            facts: { type: 'number' },
+            claims: { type: 'number' },
+            views: { type: 'number' },
+            bundles: { type: 'number' },
+            cachedBundles: { type: 'number' },
+            receipts: { type: 'number' },
+          },
+        },
+        freshness: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['overall', 'staleArtifacts', 'pendingJobs', 'completedJobs', 'recentEvents'],
+          properties: {
+            overall: componentRef('FreshnessState'),
+            staleArtifacts: { type: 'number' },
+            pendingJobs: { type: 'number' },
+            completedJobs: { type: 'number' },
+            recentEvents: { type: 'number' },
+          },
+        },
+        receipts: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['pending', 'validated', 'rejected'],
+          properties: {
+            pending: { type: 'number' },
+            validated: { type: 'number' },
+            rejected: { type: 'number' },
+          },
+        },
+        hotspots: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['staleBundleIds', 'pendingReceiptIds', 'pendingJobIds'],
+          properties: {
+            staleBundleIds: { type: 'array', items: { type: 'string' } },
+            pendingReceiptIds: { type: 'array', items: { type: 'string' } },
+            pendingJobIds: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+    DoctorReport: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['status', 'summary', 'api', 'storage', 'diagnostics', 'checks'],
+      properties: {
+        status: { type: 'string', enum: ['ok', 'warn'] },
+        summary: { type: 'string' },
+        api: componentRef('ApiSurface'),
+        storage: componentRef('StorageSurface'),
+        diagnostics: componentRef('DoctorDiagnostics'),
+        checks: {
+          type: 'array',
+          items: componentRef('DoctorCheck'),
+        },
+      },
+    },
+    FreshnessEventRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'repoId', 'files', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        repoId: { type: 'string' },
+        files: { type: 'array', items: { type: 'string' } },
+        createdAt: { type: 'string' },
+      },
+    },
+    JobRecord: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'id',
+        'kind',
+        'repoId',
+        'targetId',
+        'files',
+        'status',
+        'attempts',
+        'maxAttempts',
+        'availableAt',
+        'createdAt',
+        'updatedAt',
+      ],
+      properties: {
+        id: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: ['freshness_recompute', 'repo_scan', 'receipt_validation'],
+        },
+        repoId: { type: 'string' },
+        eventId: { type: 'string' },
+        targetId: { type: 'string' },
+        files: { type: 'array', items: { type: 'string' } },
+        status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed'] },
+        attempts: { type: 'number' },
+        maxAttempts: { type: 'number' },
+        availableAt: { type: 'string' },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' },
+        startedAt: { type: 'string' },
+        completedAt: { type: 'string' },
+        lastError: { type: 'string' },
+      },
+    },
+    JobSummary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['pending', 'running', 'completed', 'failed'],
+      properties: {
+        pending: { type: 'number' },
+        running: { type: 'number' },
+        completed: { type: 'number' },
+        failed: { type: 'number' },
+      },
+    },
+    JobListReport: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['summary', 'jobs', 'recentEvents', 'pendingReceiptIds'],
+      properties: {
+        summary: componentRef('JobSummary'),
+        jobs: {
+          type: 'array',
+          items: componentRef('JobRecord'),
+        },
+        recentEvents: {
+          type: 'array',
+          items: componentRef('FreshnessEventRecord'),
+        },
+        pendingReceiptIds: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    },
+    WorkerRunReport: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['processed', 'remaining', 'jobIds', 'failedJobIds'],
+      properties: {
+        processed: { type: 'number' },
+        remaining: { type: 'number' },
+        jobIds: { type: 'array', items: { type: 'string' } },
+        failedJobIds: { type: 'array', items: { type: 'string' } },
       },
     },
     ReceiptSubmitInput: {

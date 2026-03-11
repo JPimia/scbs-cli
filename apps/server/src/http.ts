@@ -14,11 +14,13 @@ import {
   buildApiIndex,
   normalizeBundlePlanInput,
   normalizeMissionControlTaskEnvelope,
+  normalizeQueueControlInput,
   normalizeReceiptSubmitInput,
   normalizeRegisterRepoInput,
   normalizeRepoChangesInput,
   normalizeSisuBundlePlanJob,
   normalizeSisuReceiptNote,
+  normalizeWorkerDrainInput,
   routeManifest,
 } from './contract';
 import type { RouteContract } from './contract';
@@ -46,6 +48,30 @@ const routeHandlers = new Map<string, RouteHandler>([
   ['GET /health', async ({ service }) => ({ body: await service.health() })],
   ['GET /api/v1', async ({ report }) => ({ body: buildApiIndex(report) })],
   ['GET /api/v1/', async ({ report }) => ({ body: buildApiIndex(report) })],
+  ['GET /api/v1/admin/diagnostics', async ({ service }) => ({ body: await service.doctor() })],
+  ['GET /api/v1/admin/jobs', async ({ service }) => ({ body: await service.listJobs() })],
+  [
+    'GET /api/v1/admin/jobs/:id',
+    async ({ params, service }) => ({
+      body: await service.showJob(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'POST /api/v1/admin/jobs/:id/retry',
+    async ({ params, service }) => ({
+      body: await service.retryJob(getRequiredParam(params, 'id')),
+    }),
+  ],
+  [
+    'POST /api/v1/admin/worker/drain',
+    async ({ request, service }) => ({
+      body: await service.runFreshnessWorker(
+        await withBadRequest(async () =>
+          normalizeWorkerDrainInput(await readOptionalJsonBody(request))
+        )
+      ),
+    }),
+  ],
   ['GET /api/v1/repos', async ({ service }) => ({ body: await service.listRepos() })],
   [
     'POST /api/v1/repos/register',
@@ -64,8 +90,13 @@ const routeHandlers = new Map<string, RouteHandler>([
   ],
   [
     'POST /api/v1/repos/:id/scan',
-    async ({ params, service }) => ({
-      body: await service.scanRepo(getRequiredParam(params, 'id')),
+    async ({ params, request, service }) => ({
+      body: await service.scanRepo(
+        getRequiredParam(params, 'id'),
+        await withBadRequest(async () =>
+          normalizeQueueControlInput(await readOptionalJsonBody(request))
+        )
+      ),
     }),
   ],
   [
@@ -194,8 +225,13 @@ const routeHandlers = new Map<string, RouteHandler>([
   ],
   [
     'POST /api/v1/receipts/:id/validate',
-    async ({ params, service }) => ({
-      body: await service.validateReceipt(getRequiredParam(params, 'id')),
+    async ({ params, request, service }) => ({
+      body: await service.validateReceipt(
+        getRequiredParam(params, 'id'),
+        await withBadRequest(async () =>
+          normalizeQueueControlInput(await readOptionalJsonBody(request))
+        )
+      ),
     }),
   ],
   [
@@ -291,6 +327,34 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
     const message = error instanceof Error ? error.message : 'Request body must be valid JSON.';
     throw new HttpError(400, 'Bad Request', message);
   }
+}
+
+async function readOptionalJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const method = normalizeMethod(request.method);
+  if (method !== 'POST') {
+    return {};
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (raw.length === 0) {
+    return {};
+  }
+
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Expected a JSON object request body.');
+  }
+
+  return parsed as Record<string, unknown>;
 }
 
 async function withBadRequest<T>(callback: () => Promise<T> | T): Promise<T> {

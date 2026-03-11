@@ -13,6 +13,7 @@ import type {
   ScbsService,
 } from './service';
 import type { DoctorReport, MigrationReport, StorageAdapter, StorageSurface } from './types';
+import type { FreshnessJobKind } from './types';
 
 interface DurableServiceOptions {
   cwd?: string;
@@ -288,6 +289,18 @@ export class DurableScbsService implements ScbsService {
     };
   }
 
+  public async listJobs() {
+    return this.withService((service) => service.listJobs());
+  }
+
+  public async showJob(id: string) {
+    return this.withService((service) => service.showJob(id));
+  }
+
+  public async retryJob(id: string) {
+    return this.withMutation((service) => service.retryJob(id));
+  }
+
   public async migrate(): Promise<MigrationReport> {
     const migration = await this.store.migrate();
     return {
@@ -379,10 +392,19 @@ export class DurableScbsService implements ScbsService {
 
   public async runFreshnessWorker(options?: {
     limit?: number;
-    kinds?: Array<'freshness_recompute' | 'repo_scan' | 'receipt_validation'>;
+    kinds?: FreshnessJobKind[];
     jobIds?: string[];
   }) {
     return this.withMutation((service) => service.runFreshnessWorker(options));
+  }
+
+  public async runWorkerLoop(options?: {
+    pollIntervalMs?: number;
+    maxIdleCycles?: number;
+    limit?: number;
+    kinds?: FreshnessJobKind[];
+  }) {
+    return this.withMutation((service) => service.runWorkerLoop(options));
   }
 
   public async getFreshnessStatus() {
