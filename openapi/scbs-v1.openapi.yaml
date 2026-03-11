@@ -1,0 +1,621 @@
+openapi: "3.1.0"
+info:
+  title: "SCBS Server API"
+  version: "0.1.0"
+  description: "First-class server-owned HTTP contract for the Shared Context Build System versioned v1 API."
+servers:
+  - 
+    url: "http://127.0.0.1:8791"
+tags:
+  - 
+    name: "System"
+  - 
+    name: "Bundles"
+  - 
+    name: "Freshness"
+  - 
+    name: "Receipts"
+paths:
+  /health:
+    get:
+      tags:
+        - "System"
+      operationId: "getHealth"
+      summary: "Return the SCBS service health report."
+      responses:
+        200:
+          description: "Health status for the running SCBS service."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1:
+    get:
+      tags:
+        - "System"
+      operationId: "getApiIndex"
+      summary: "Return the SCBS API index for version v1."
+      responses:
+        200:
+          description: "Top-level API index and endpoint directory."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiIndexResponse"
+  /api/v1/:
+    get:
+      tags:
+        - "System"
+      operationId: "getApiIndexTrailingSlash"
+      summary: "Return the SCBS API index for version v1 with a trailing slash."
+      responses:
+        200:
+          description: "Top-level API index and endpoint directory."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiIndexResponse"
+  /api/v1/bundles/plan:
+    post:
+      tags:
+        - "Bundles"
+      operationId: "planBundle"
+      summary: "Plan a task bundle against one or more repositories."
+      responses:
+        201:
+          description: "Planned bundle record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleRecord"
+      requestBody:
+        required: true
+        description: "Bundle planning input."
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BundlePlanInput"
+  /api/v1/bundles/cache:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "listBundleCache"
+      summary: "List cached task bundles and their freshness."
+      responses:
+        200:
+          description: "Cached bundle entries."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleCacheEntryList"
+  /api/v1/bundles/cache/clear:
+    post:
+      tags:
+        - "Bundles"
+      operationId: "clearBundleCache"
+      summary: "Clear the bundle cache."
+      responses:
+        200:
+          description: "Number of cleared cache entries."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearBundleCacheResult"
+  /api/v1/bundles/{id}:
+    get:
+      tags:
+        - "Bundles"
+      operationId: "showBundle"
+      summary: "Fetch a planned bundle by id."
+      responses:
+        200:
+          description: "Bundle record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Bundle identifier."
+          schema:
+            type: "string"
+  /api/v1/bundles/{id}/freshness:
+    get:
+      tags:
+        - "Freshness"
+      operationId: "getBundleFreshness"
+      summary: "Fetch the freshness state for a bundle."
+      responses:
+        200:
+          description: "Bundle freshness report."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleFreshnessResponse"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Bundle identifier."
+          schema:
+            type: "string"
+  /api/v1/bundles/{id}/expire:
+    post:
+      tags:
+        - "Bundles"
+      operationId: "expireBundle"
+      summary: "Expire a bundle immediately."
+      responses:
+        200:
+          description: "Expired bundle record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Bundle identifier."
+          schema:
+            type: "string"
+  /api/v1/freshness/impacts:
+    get:
+      tags:
+        - "Freshness"
+      operationId: "getFreshnessImpacts"
+      summary: "List freshness impacts across artifacts."
+      responses:
+        200:
+          description: "Freshness impact records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreshnessImpactList"
+  /api/v1/freshness/status:
+    get:
+      tags:
+        - "Freshness"
+      operationId: "getFreshnessStatus"
+      summary: "Return overall freshness status."
+      responses:
+        200:
+          description: "Current system freshness status."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreshnessStatusResponse"
+  /api/v1/freshness/recompute:
+    post:
+      tags:
+        - "Freshness"
+      operationId: "recomputeFreshness"
+      summary: "Recompute freshness for tracked artifacts."
+      responses:
+        200:
+          description: "Recompute result."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecomputeFreshnessResult"
+  /api/v1/receipts:
+    post:
+      tags:
+        - "Receipts"
+      operationId: "createReceipt"
+      summary: "Submit a receipt for review."
+      responses:
+        201:
+          description: "Created receipt record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptRecord"
+      requestBody:
+        required: true
+        description: "Receipt submission payload."
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReceiptSubmitInput"
+    get:
+      tags:
+        - "Receipts"
+      operationId: "listReceipts"
+      summary: "List submitted receipts."
+      responses:
+        200:
+          description: "Receipt records."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptRecordList"
+  /api/v1/receipts/{id}:
+    get:
+      tags:
+        - "Receipts"
+      operationId: "showReceipt"
+      summary: "Fetch a receipt by id."
+      responses:
+        200:
+          description: "Receipt record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Receipt identifier."
+          schema:
+            type: "string"
+  /api/v1/receipts/{id}/validate:
+    post:
+      tags:
+        - "Receipts"
+      operationId: "validateReceipt"
+      summary: "Validate a receipt."
+      responses:
+        200:
+          description: "Validated receipt record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Receipt identifier."
+          schema:
+            type: "string"
+  /api/v1/receipts/{id}/reject:
+    post:
+      tags:
+        - "Receipts"
+      operationId: "rejectReceipt"
+      summary: "Reject a receipt."
+      responses:
+        200:
+          description: "Rejected receipt record."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptRecord"
+      parameters:
+        - 
+          name: "id"
+          in: "path"
+          required: true
+          description: "Receipt identifier."
+          schema:
+            type: "string"
+components:
+  schemas:
+    FreshnessState:
+      type: "string"
+      enum:
+        - "fresh"
+        - "stale"
+        - "expired"
+        - "partial"
+        - "unknown"
+    ServiceCapability:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "name"
+        - "description"
+      properties:
+        name:
+          type: "string"
+        description:
+          type: "string"
+    ApiSurface:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "kind"
+        - "baseUrl"
+        - "apiVersion"
+        - "mode"
+        - "capabilities"
+      properties:
+        kind:
+          const: "local-durable"
+        baseUrl:
+          type: "string"
+        apiVersion:
+          const: "v1"
+        mode:
+          type: "string"
+          enum:
+            - "dry-run"
+            - "live"
+        capabilities:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/ServiceCapability"
+    HealthResponse:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "status"
+        - "service"
+        - "version"
+      properties:
+        status:
+          const: "ok"
+        service:
+          type: "string"
+        version:
+          type: "string"
+    ApiIndexResponse:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "service"
+        - "status"
+        - "api"
+        - "endpoints"
+      properties:
+        service:
+          type: "string"
+        status:
+          type: "string"
+          enum:
+            - "ready"
+            - "listening"
+        api:
+          $ref: "#/components/schemas/ApiSurface"
+        endpoints:
+          type: "object"
+          additionalProperties: false
+          required:
+            - "health"
+            - "root"
+            - "planBundle"
+            - "showBundle"
+            - "bundleFreshness"
+            - "expireBundle"
+            - "listBundleCache"
+            - "clearBundleCache"
+            - "freshnessImpacts"
+            - "freshnessStatus"
+            - "recomputeFreshness"
+            - "createReceipt"
+            - "listReceipts"
+            - "showReceipt"
+            - "validateReceipt"
+            - "rejectReceipt"
+          properties:
+            health:
+              type: "string"
+            root:
+              type: "string"
+            planBundle:
+              type: "string"
+            showBundle:
+              type: "string"
+            bundleFreshness:
+              type: "string"
+            expireBundle:
+              type: "string"
+            listBundleCache:
+              type: "string"
+            clearBundleCache:
+              type: "string"
+            freshnessImpacts:
+              type: "string"
+            freshnessStatus:
+              type: "string"
+            recomputeFreshness:
+              type: "string"
+            createReceipt:
+              type: "string"
+            listReceipts:
+              type: "string"
+            showReceipt:
+              type: "string"
+            validateReceipt:
+              type: "string"
+            rejectReceipt:
+              type: "string"
+    BundlePlanInput:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "task"
+      properties:
+        task:
+          type: "string"
+        repo:
+          type: "string"
+        repoIds:
+          type: "array"
+          items:
+            type: "string"
+        parentBundleId:
+          type: "string"
+        fileScope:
+          type: "array"
+          items:
+            type: "string"
+        symbolScope:
+          type: "array"
+          items:
+            type: "string"
+      oneOf:
+        - 
+          required:
+            - "repo"
+        - 
+          required:
+            - "repoIds"
+    BundleRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "repoIds"
+        - "task"
+        - "viewIds"
+        - "freshness"
+      properties:
+        id:
+          type: "string"
+        repoIds:
+          type: "array"
+          items:
+            type: "string"
+        task:
+          type: "string"
+        viewIds:
+          type: "array"
+          items:
+            type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+        parentBundleId:
+          type: "string"
+        fileScope:
+          type: "array"
+          items:
+            type: "string"
+        symbolScope:
+          type: "array"
+          items:
+            type: "string"
+    BundleFreshnessResponse:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "bundleId"
+        - "freshness"
+      properties:
+        bundleId:
+          type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+    BundleCacheEntry:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "key"
+        - "bundleId"
+        - "freshness"
+      properties:
+        key:
+          type: "string"
+        bundleId:
+          type: "string"
+        freshness:
+          $ref: "#/components/schemas/FreshnessState"
+    BundleCacheEntryList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/BundleCacheEntry"
+    ClearBundleCacheResult:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "cleared"
+      properties:
+        cleared:
+          type: "integer"
+          minimum: 0
+    FreshnessImpact:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "artifactType"
+        - "artifactId"
+        - "state"
+      properties:
+        artifactType:
+          type: "string"
+          enum:
+            - "fact"
+            - "claim"
+            - "view"
+            - "bundle"
+        artifactId:
+          type: "string"
+        state:
+          $ref: "#/components/schemas/FreshnessState"
+    FreshnessImpactList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/FreshnessImpact"
+    FreshnessStatusResponse:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "overall"
+        - "staleArtifacts"
+      properties:
+        overall:
+          $ref: "#/components/schemas/FreshnessState"
+        staleArtifacts:
+          type: "integer"
+          minimum: 0
+    RecomputeFreshnessResult:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "updated"
+      properties:
+        updated:
+          type: "integer"
+          minimum: 0
+    ReceiptSubmitInput:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "agent"
+        - "summary"
+      properties:
+        bundle:
+          type: "string"
+        agent:
+          type: "string"
+        summary:
+          type: "string"
+    ReceiptRecord:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "bundleId"
+        - "agent"
+        - "summary"
+        - "status"
+      properties:
+        id:
+          type: "string"
+        bundleId:
+          type:
+            - "string"
+            - "null"
+        agent:
+          type: "string"
+        summary:
+          type: "string"
+        status:
+          type: "string"
+          enum:
+            - "pending"
+            - "validated"
+            - "rejected"
+    ReceiptRecordList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/ReceiptRecord"
