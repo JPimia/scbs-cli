@@ -1,5 +1,6 @@
 import type { AgentReceipt, SourceAnchor } from '../../../protocol/src/index';
 import {
+  adjustClaimFromValidatedReceipt,
   claimsFromReceipts,
   ingestReceipt,
   rejectReceipt,
@@ -32,9 +33,26 @@ export class ReceiptService {
     this.store.receipts = this.store.receipts.map((entry) =>
       entry.id === id ? decision.receipt : entry
     );
-    if (decision.promotedClaim) {
-      this.store.claims.push(decision.promotedClaim);
-      const affectedRepoIds = new Set([decision.promotedClaim.repoId]);
+    if (decision.promotedClaims.length > 0) {
+      const promotedIds = new Set(decision.promotedClaims.map((claim) => claim.id));
+      this.store.claims = this.store.claims
+        .map((claim) => {
+          const adjustment = adjustClaimFromValidatedReceipt(claim, decision.receipt);
+          if (!adjustment || promotedIds.has(claim.id)) {
+            return claim;
+          }
+          return {
+            ...claim,
+            confidence: adjustment.confidence,
+            trustTier: adjustment.trustTier,
+            freshness: adjustment.freshness,
+            metadata: adjustment.metadata,
+            updatedAt: decision.receipt.updatedAt,
+          };
+        })
+        .filter((claim) => !promotedIds.has(claim.id))
+        .concat(decision.promotedClaims);
+      const affectedRepoIds = new Set(decision.promotedClaims.map((claim) => claim.repoId));
       for (const repoId of affectedRepoIds) {
         const hasGraphInputs =
           this.store.files.length > 0 ||

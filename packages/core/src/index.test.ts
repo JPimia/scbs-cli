@@ -953,6 +953,14 @@ describe('core services', () => {
     ]);
     expect(validated.status).toBe('validated');
     expect(services.receipts.promotedClaims()[0]?.anchors[0]?.filePath).toBe('src/index.ts');
+    const receiptSupport = services.store.claims.find((claim) => claim.id === 'claim_1')?.metadata
+      ?.receiptSupport as Array<{ receiptId?: string; receiptType?: string }> | undefined;
+    expect(
+      receiptSupport?.some(
+        (entry) => entry.receiptId === receipt.id && entry.receiptType === 'finding'
+      )
+    ).toBeTrue();
+    expect(services.store.claims.find((claim) => claim.id === 'claim_1')?.confidence).toBe(1);
     expect(
       services.store.views.some(
         (view) =>
@@ -1011,6 +1019,54 @@ describe('core services', () => {
           view.type === 'file_scope' &&
           view.claimIds.includes(`claim_from_${receipt.id}`) &&
           view.fileScope?.includes('src/index.ts')
+      )
+    ).toBeTrue();
+  });
+
+  it('applies corrective receipt adjustments to overlapping claims', () => {
+    const services = createCoreServices();
+    const repo = services.repositories.register({ name: 'manual', rootPath: '/tmp/manual' });
+
+    services.store.claims = [
+      {
+        id: 'claim_fixme',
+        repoId: repo.id,
+        text: 'src/index.ts is correct',
+        type: 'composed',
+        confidence: 0.8,
+        trustTier: 'derived',
+        factIds: [],
+        anchors: [{ repoId: repo.id, filePath: 'src/index.ts', fileHash: 'hash-1' }],
+        freshness: 'fresh',
+        invalidationKeys: ['src/index.ts'],
+        metadata: { filePath: 'src/index.ts', claimKind: 'file_interface' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const receipt = services.receipts.submit({
+      repoIds: [repo.id],
+      type: 'correction',
+      summary: 'The previous interpretation was wrong',
+      payload: {},
+    });
+
+    services.receipts.validate(receipt.id, [
+      { repoId: repo.id, filePath: 'src/index.ts', fileHash: 'hash-2' },
+    ]);
+
+    expect(services.store.claims.find((claim) => claim.id === 'claim_fixme')?.confidence).toBe(0.6);
+    expect(services.store.claims.find((claim) => claim.id === 'claim_fixme')?.freshness).toBe(
+      'partial'
+    );
+    const receiptCorrections = services.store.claims.find((claim) => claim.id === 'claim_fixme')
+      ?.metadata?.receiptCorrections as
+      | Array<{ receiptId?: string; receiptType?: string }>
+      | undefined;
+    expect(
+      receiptCorrections?.some(
+        (entry) => entry.receiptId === receipt.id && entry.receiptType === 'correction'
       )
     ).toBeTrue();
   });

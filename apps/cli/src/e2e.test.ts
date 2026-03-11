@@ -857,12 +857,20 @@ describe('CLI happy path', () => {
           id: 'claim_from_receipt_agent-1-submitted-proof',
           repoId: repo.id,
           statement: 'submitted proof',
+          trustTier: 'human',
           freshness: 'partial',
           metadata: expect.objectContaining({
             claimKind: 'validated_receipt',
             receiptId: 'receipt_agent-1-submitted-proof',
           }),
           invalidationKeys: ['src/index.ts'],
+        }),
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            claimKind: 'receipt_file_observation',
+            receiptId: 'receipt_agent-1-submitted-proof',
+            filePath: 'src/index.ts',
+          }),
         }),
       ])
     );

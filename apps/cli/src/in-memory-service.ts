@@ -9,6 +9,7 @@ import type {
   SymbolRecord,
 } from '../../../packages/protocol/src/index';
 import { validateReceipt as validateStoredReceipt } from '../../../packages/receipts/src/validation';
+import { adjustClaimFromValidatedReceipt } from '../../../packages/receipts/src/validation';
 import type {
   BundlePlanInput,
   ReceiptSubmitInput,
@@ -797,12 +798,31 @@ export class InMemoryScbsService implements ScbsService {
       entry.id === id ? (validatedReceipt as ReceiptRecord) : entry
     );
 
-    if (decision.promotedClaim) {
-      const promotedClaim = toDurableClaim(decision.promotedClaim);
+    if (decision.promotedClaims.length > 0) {
+      const promotedClaims = decision.promotedClaims.map((claim) => toDurableClaim(claim));
+      const promotedIds = new Set(promotedClaims.map((claim) => claim.id));
       this.state.claims = this.state.claims
-        .filter((entry) => entry.id !== promotedClaim.id)
-        .concat(promotedClaim as ClaimRecord);
-      this.rebuildViewsForRepo(promotedClaim.repoId);
+        .map((entry) => {
+          const protocolClaim = toProtocolClaim(entry as DurableClaimRecord);
+          const adjustment = adjustClaimFromValidatedReceipt(protocolClaim, decision.receipt);
+          if (!adjustment || promotedIds.has(entry.id)) {
+            return entry;
+          }
+          return {
+            ...entry,
+            confidence: adjustment.confidence,
+            trustTier: adjustment.trustTier,
+            freshness: adjustment.freshness,
+            metadata: adjustment.metadata,
+            updatedAt: decision.receipt.updatedAt,
+          } as ClaimRecord;
+        })
+        .filter((entry) => !promotedIds.has(entry.id))
+        .concat(promotedClaims as ClaimRecord[]);
+      const affectedRepoIds = [...new Set(promotedClaims.map((claim) => claim.repoId))];
+      for (const repoId of affectedRepoIds) {
+        this.rebuildViewsForRepo(repoId);
+      }
     }
 
     return validatedReceipt as ReceiptRecord;

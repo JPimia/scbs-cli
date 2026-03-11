@@ -19,7 +19,41 @@ describe('receipts', () => {
     expect(decision.receipt.status).toBe('validated');
     expect(decision.promotedClaim?.metadata?.receiptId).toBe('rcpt_1');
     expect(decision.promotedClaim?.anchors[0]?.filePath).toBe('package.json');
+    expect(decision.promotedClaim?.trustTier).toBe('human');
+    expect(decision.promotedClaims.length).toBeGreaterThan(1);
+    expect(
+      decision.promotedClaims.some(
+        (claim) => claim.metadata?.claimKind === 'receipt_file_observation'
+      )
+    ).toBeTrue();
     expect(claimsFromReceipts([decision.receipt])[0]?.invalidationKeys).toEqual(['package.json']);
+  });
+
+  it('emits symbol-scoped claims when validation anchors include a symbol id', () => {
+    const receipt = ingestReceipt('rcpt_symbol', {
+      repoIds: ['repo_1'],
+      type: 'test_result',
+      summary: 'The exported symbol passed validation',
+      payload: {},
+    });
+
+    const decision = validateReceipt(receipt, [
+      {
+        repoId: 'repo_1',
+        filePath: 'src/index.ts',
+        fileHash: 'abc',
+        symbolId: 'symbol_hello',
+      },
+    ]);
+
+    expect(
+      decision.promotedClaims.some(
+        (claim) =>
+          claim.metadata?.claimKind === 'receipt_symbol_observation' &&
+          Array.isArray(claim.metadata?.symbolIds) &&
+          claim.metadata.symbolIds.includes('symbol_hello')
+      )
+    ).toBeTrue();
   });
 
   it('records rejection reason', () => {

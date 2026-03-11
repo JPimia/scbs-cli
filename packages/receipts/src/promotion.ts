@@ -7,31 +7,37 @@ export function filterActiveReceipts(receipts: AgentReceipt[]): AgentReceipt[] {
 export function claimsFromReceipts(receipts: AgentReceipt[]): ClaimRecord[] {
   return receipts
     .filter((receipt) => receipt.status === 'validated')
-    .map((receipt) => {
+    .flatMap((receipt) => {
       const validation = (receipt.payload.validation ?? {}) as {
         anchors?: ClaimRecord['anchors'];
         invalidationKeys?: string[];
+        promotedClaims?: ClaimRecord[];
       };
-      return {
-        id: `claim_${receipt.id}`,
-        repoId: receipt.repoIds[0] ?? 'unknown',
-        text: receipt.summary,
-        type: 'provisional',
-        confidence: 0.6,
-        trustTier: 'provisional',
-        factIds: [],
-        anchors: Array.isArray(validation.anchors) ? validation.anchors : [],
-        freshness: 'partial',
-        invalidationKeys: Array.isArray(validation.invalidationKeys)
-          ? validation.invalidationKeys
-          : [],
-        metadata: {
-          receiptId: receipt.id,
-          receiptType: receipt.type,
-          claimKind: 'validated_receipt',
+      if (Array.isArray(validation.promotedClaims) && validation.promotedClaims.length > 0) {
+        return validation.promotedClaims;
+      }
+      return [
+        {
+          id: `claim_${receipt.id}`,
+          repoId: receipt.repoIds[0] ?? 'unknown',
+          text: receipt.summary,
+          type: 'human-authored',
+          confidence: 0.82,
+          trustTier: 'human',
+          factIds: [],
+          anchors: Array.isArray(validation.anchors) ? validation.anchors : [],
+          freshness: 'partial',
+          invalidationKeys: Array.isArray(validation.invalidationKeys)
+            ? validation.invalidationKeys
+            : [],
+          metadata: {
+            receiptId: receipt.id,
+            receiptType: receipt.type,
+            claimKind: 'validated_receipt',
+          },
+          createdAt: receipt.createdAt,
+          updatedAt: receipt.updatedAt,
         },
-        createdAt: receipt.createdAt,
-        updatedAt: receipt.updatedAt,
-      };
+      ];
     });
 }
