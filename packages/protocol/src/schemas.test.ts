@@ -9,9 +9,12 @@ describe('protocol schemas', () => {
       taskTitle: 'Inspect bundle',
       repoIds: ['repo_1'],
       fileScope: ['packages/core/src/index.ts'],
+      symbolScope: ['BundlePlanner'],
+      parentBundleId: 'bundle_1',
     });
 
     expect(parsed.taskTitle).toBe('Inspect bundle');
+    expect(parsed.parentBundleId).toBe('bundle_1');
   });
 
   it('rejects invalid claim confidence', () => {

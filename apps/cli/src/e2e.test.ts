@@ -141,6 +141,49 @@ describe('CLI happy path', () => {
       },
     });
 
+    const childBundle = await runCli(
+      [
+        'bundle',
+        'plan',
+        '--task',
+        'inherit context',
+        '--repo',
+        'repo_demo-repo',
+        '--parent-bundle',
+        'bundle_bootstrap-context',
+        '--file-scope',
+        'src/index.ts',
+        '--json',
+      ],
+      service
+    );
+    expect(childBundle.exitCode).toBe(0);
+    expect(JSON.parse(childBundle.stdout)).toMatchObject({
+      data: {
+        id: 'bundle_inherit-context',
+        repoIds: ['repo_demo-repo'],
+        task: 'inherit context',
+        parentBundleId: 'bundle_bootstrap-context',
+        fileScope: ['src/index.ts'],
+      },
+    });
+
+    const missingParent = await runCli(
+      [
+        'bundle',
+        'plan',
+        '--task',
+        'broken inheritance',
+        '--repo',
+        'repo_demo-repo',
+        '--parent-bundle',
+        'bundle_missing',
+      ],
+      service
+    );
+    expect(missingParent.exitCode).toBe(1);
+    expect(missingParent.stderr).toBe('Parent bundle "bundle_missing" was not found.');
+
     const nextService = createDurableScbsService({ cwd });
     const repos = await runCli(['repo', 'list', '--json'], nextService);
     expect(repos.exitCode).toBe(0);
@@ -320,7 +363,12 @@ describe('CLI happy path', () => {
 
     const createdBundleResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
       method: 'POST',
-      body: { task: 'ship api', repo: repo.id },
+      body: {
+        task: 'ship api',
+        repo: repo.id,
+        parentBundleId: bundle.id,
+        fileScope: ['src/api.ts'],
+      },
     });
     expect(createdBundleResponse.status).toBe(201);
     expect(createdBundleResponse.body).toMatchObject({
@@ -328,6 +376,18 @@ describe('CLI happy path', () => {
       repoIds: [repo.id],
       task: 'ship api',
       freshness: 'fresh',
+      parentBundleId: bundle.id,
+      fileScope: ['src/api.ts'],
+    });
+
+    const missingParentResponse = await requestJson('http://127.0.0.1:8791/api/v1/bundles/plan', {
+      method: 'POST',
+      body: { task: 'missing parent', repo: repo.id, parentBundleId: 'bundle_missing' },
+    });
+    expect(missingParentResponse.status).toBe(404);
+    expect(missingParentResponse.body).toMatchObject({
+      error: 'Not Found',
+      message: 'Parent bundle "bundle_missing" was not found.',
     });
 
     const createdReceiptResponse = await requestJson('http://127.0.0.1:8791/api/v1/receipts', {

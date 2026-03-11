@@ -92,6 +92,8 @@ export const createSeedState = (): SeedState => {
         task: 'bootstrap repository context',
         viewIds: [viewId],
         freshness: 'fresh',
+        fileScope: ['.'],
+        symbolScope: [],
       },
     ],
     receipts: [
@@ -271,14 +273,27 @@ export class InMemoryScbsService implements ScbsService {
 
   public async planBundle(input: BundlePlanInput) {
     requireById(this.state.repos, input.repoId, 'Repository');
+    const parentBundle =
+      input.parentBundleId === undefined
+        ? undefined
+        : requireById(this.state.bundles, input.parentBundleId, 'Parent bundle');
+    const inheritedViewIds = parentBundle?.viewIds ?? [];
+    const inheritedFileScope = parentBundle?.fileScope ?? [];
+    const inheritedSymbolScope = parentBundle?.symbolScope ?? [];
     const bundle: BundleRecord = {
       id: `bundle_${slugify(input.task)}`,
       repoIds: [input.repoId],
       task: input.task,
-      viewIds: this.state.views
-        .filter((view) => view.repoId === input.repoId)
-        .map((view) => view.id),
-      freshness: 'fresh',
+      viewIds: [
+        ...new Set([
+          ...inheritedViewIds,
+          ...this.state.views.filter((view) => view.repoId === input.repoId).map((view) => view.id),
+        ]),
+      ],
+      freshness: parentBundle?.freshness ?? 'fresh',
+      parentBundleId: parentBundle?.id,
+      fileScope: [...new Set([...(input.fileScope ?? []), ...inheritedFileScope])],
+      symbolScope: [...new Set([...(input.symbolScope ?? []), ...inheritedSymbolScope])],
     };
 
     this.state.bundles.push(bundle);

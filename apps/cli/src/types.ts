@@ -88,6 +88,9 @@ export interface BundleRecord {
   task: string;
   viewIds: string[];
   freshness: FreshnessState;
+  parentBundleId?: string;
+  fileScope?: string[];
+  symbolScope?: string[];
 }
 
 export interface FreshnessImpact {
