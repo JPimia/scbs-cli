@@ -19,6 +19,9 @@ It gives you:
 This is not the full `1.0` product described in `SCBS.md`, but it is ready to integrate as a real
 shared service.
 
+Mission Control / SISU deployment guidance is in
+[MISSION-CONTROL-SISU-SCBS-INTEGRATION.md](/home/jarip/projects/scbs/MISSION-CONTROL-SISU-SCBS-INTEGRATION.md).
+
 ## What To Use This For
 
 Use SCBS when your swarm needs a system of record for:
