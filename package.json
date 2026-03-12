@@ -22,6 +22,7 @@
     "verify:openapi": "bun scripts/verify-openapi.ts",
     "verify:postgres": "bun scripts/verify-postgres.ts",
     "smoke:postgres-service": "bun scripts/smoke-postgres-service.ts",
+    "platform:up": "bun scripts/platform-up.ts",
     "cli": "bun run --cwd apps/cli dev --"
   },
   "devDependencies": {

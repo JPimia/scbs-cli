@@ -21,6 +21,8 @@ shared service.
 
 Mission Control / SISU deployment guidance is in
 [MISSION-CONTROL-SISU-SCBS-INTEGRATION.md](/home/jarip/projects/scbs/MISSION-CONTROL-SISU-SCBS-INTEGRATION.md).
+Platform startup guidance is in
+[MISSION-CONTROL-PLATFORM-UP.md](/home/jarip/projects/scbs/MISSION-CONTROL-PLATFORM-UP.md).
 
 ## What To Use This For
 
@@ -69,6 +71,65 @@ Workspace basics:
 ## Quick Start
 
 If you want SCBS as a real swarm service, use PostgreSQL.
+
+## Single-Agent Quick Start
+
+SCBS is usable by one agent only.
+
+That mode is useful if:
+- you want to drive SCBS directly from one Codex/Claude-style agent
+- you want to debug bundle planning before wiring the full swarm
+- you want a minimal local context service without Mission Control or SISU
+
+The fastest route is local JSON storage.
+
+### 1. Initialize SCBS
+
+```bash
+bun run cli -- init --json
+```
+
+### 2. Register your repo
+
+```bash
+bun run cli -- repo register --name my-repo --path /absolute/path/to/repo --json
+```
+
+### 3. Plan a bundle for the agent
+
+```bash
+bun run cli -- bundle plan \
+  --task "Investigate stale receipt handling" \
+  --repo repo_my-repo \
+  --file-scope src/index.ts \
+  --symbol-scope validateReceipt \
+  --json
+```
+
+### 4. Inspect the bundle
+
+```bash
+bun run cli -- bundle show <bundle-id> --json
+```
+
+### 5. Do the work, then submit a receipt
+
+```bash
+bun run cli -- receipt submit \
+  --bundle <bundle-id> \
+  --agent solo-agent \
+  --summary "Validated the failing path and prepared a fix." \
+  --json
+```
+
+### 6. Validate the receipt
+
+```bash
+bun run cli -- receipt validate <receipt-id> --json
+```
+
+At that point, SCBS is acting as a context compiler, bundle planner, and receipt ledger for one
+agent without the rest of the swarm.
 
 ### 1. Start PostgreSQL
 
@@ -129,6 +190,33 @@ That smoke path verifies:
 - queued background work
 - real HTTP serve
 - admin diagnostics and job endpoints
+
+## Platform Up For Local Integrated Development
+
+The repo now includes a first local integrated launcher:
+
+```bash
+bun run platform:up
+```
+
+That launcher:
+- optionally starts PostgreSQL
+- runs SCBS migration
+- starts `scbs-api`
+- waits for SCBS health
+- starts `scbs-worker`
+- optionally starts SISU if `SISU_START_COMMAND` is set
+- optionally starts Mission Control if `MISSION_CONTROL_START_COMMAND` is set
+
+Example:
+
+```bash
+export SISU_START_COMMAND="cd /path/to/sisu && bun run dev"
+export MISSION_CONTROL_START_COMMAND="cd /path/to/mission-control && bun run dev"
+bun run platform:up
+```
+
+This is a local development launcher, not a production supervisor.
 
 ## Agent Swarm Integration Path
 
